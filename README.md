@@ -1,13 +1,57 @@
 
-$local = Get-ChildItem -Path $stage -Recurse -Filter $Pattern -EA SilentlyContinue |
-    Sort-Object -Property @{Expression='LastWriteTime';Descending=$true}, @{Expression='Name';Descending=$true} |
-    Select-Object -First 1
+$argList = "/i `"$installer64`" /qn /norestart /L*v `"$env:ProgramData\IvantiLogs\Chrome64-msi.log`""
+$proc = Start-Process -FilePath "msiexec.exe" -ArgumentList $argList -Wait -PassThru
 
-$remote = Get-ChildItem -Path $share -Recurse -Filter $Pattern -EA SilentlyContinue |
-    Sort-Object -Property @{Expression='LastWriteTime';Descending=$true}, @{Expression='Name';Descending=$true} |
-    Select-Object -First 1
+Log "Chrome64 exit code: $($proc.ExitCode)"
 
-Log "Remove-OldVersions result for ${NameForLog}: removed=$removed failed=$failed"
+if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
+    throw "Chrome x64 installation failed with exit code $($proc.ExitCode)"
+}
+
+
+
+$installer64 = Resolve-Installer -Pattern $InstallerFile64 -AppFolder $AppFolder -ShareSubPath $ShareSubPath
+
+Log "DEBUG installer64 raw value: [$installer64]"
+Log "DEBUG installer64 exists: $([bool](Test-Path -LiteralPath $installer64))"
+
+if ([string]::IsNullOrWhiteSpace($installer64) -or -not (Test-Path -LiteralPath $installer64)) {
+    throw "Chrome x64 installer not found or invalid path: $installer64"
+}
+
+
+
+function Resolve-Installer {
+    param(
+        [Parameter(Mandatory)][string]$Pattern,
+        [Parameter(Mandatory)][string]$AppFolder,
+        [Parameter(Mandatory)][string]$ShareSubPath
+    )
+
+    $stage = Join-Path "C:\install_files\rem" $AppFolder
+    $share = Join-Path $script:InstallerShareRoot $ShareSubPath
+
+    $local = Get-ChildItem -Path $stage -Recurse -Filter $Pattern -ErrorAction SilentlyContinue |
+        Sort-Object -Property @{Expression='LastWriteTime';Descending=$true}, @{Expression='Name';Descending=$true} |
+        Select-Object -First 1
+
+    if ($local -and (Test-Path -LiteralPath $local.FullName)) {
+        Log "Resolved local installer: $($local.FullName)"
+        return $local.FullName
+    }
+
+    $remote = Get-ChildItem -Path $share -Recurse -Filter $Pattern -ErrorAction SilentlyContinue |
+        Sort-Object -Property @{Expression='LastWriteTime';Descending=$true}, @{Expression='Name';Descending=$true} |
+        Select-Object -First 1
+
+    if ($remote -and (Test-Path -LiteralPath $remote.FullName)) {
+        Log "Resolved share installer: $($remote.FullName)"
+        return $remote.FullName
+    }
+
+    Log "Installer not found: $Pattern | AppFolder: $AppFolder | ShareSubPath: $ShareSubPath" "ERROR"
+    return $null
+}
 
 
 
