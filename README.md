@@ -1,4 +1,68 @@
 
+if (!$need64 -and !$need32) {
+    if ((Get-PreferredArch) -eq '64-bit') {
+        $need64 = $true
+    }
+    else {
+        $need32 = $true
+    }
+}
+
+$ivantiLogDir = Join-Path $env:ProgramData "IvantiLogs"
+if (!(Test-Path -LiteralPath $ivantiLogDir)) {
+    New-Item -Path $ivantiLogDir -ItemType Directory -Force | Out-Null
+}
+
+if ($need64) {
+    $installer64 = Resolve-Installer -Pattern $InstallerFile64 -AppFolder $AppFolder -ShareSubPath $ShareSubPath
+
+    Log "DEBUG installer64 raw value: [$installer64]"
+    Log "DEBUG installer64 exists: $([bool](Test-Path -LiteralPath $installer64))"
+
+    if ([string]::IsNullOrWhiteSpace($installer64) -or !(Test-Path -LiteralPath $installer64)) {
+        throw "64-bit Chrome installer not found or invalid path: $installer64"
+    }
+
+    $chrome64Log = Join-Path $ivantiLogDir "Chrome64-msi.log"
+    $argList = "/i `"$installer64`" /qn /norestart ALLUSERS=1 /L*v `"$chrome64Log`""
+    $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList $argList -Wait -PassThru
+
+    Log "Chrome64 exit code: $($proc.ExitCode)"
+
+    if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
+        throw "Chrome x64 installation failed with exit code $($proc.ExitCode)"
+    }
+}
+
+if ($need32) {
+    $installer32 = Resolve-Installer -Pattern $InstallerFile32 -AppFolder $AppFolder -ShareSubPath $ShareSubPath
+
+    Log "DEBUG installer32 raw value: [$installer32]"
+    Log "DEBUG installer32 exists: $([bool](Test-Path -LiteralPath $installer32))"
+
+    if ([string]::IsNullOrWhiteSpace($installer32) -or !(Test-Path -LiteralPath $installer32)) {
+        throw "32-bit Chrome installer not found or invalid path: $installer32"
+    }
+
+    $chrome32Log = Join-Path $ivantiLogDir "Chrome32-msi.log"
+    $argList = "/i `"$installer32`" /qn /norestart ALLUSERS=1 /L*v `"$chrome32Log`""
+    $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList $argList -Wait -PassThru
+
+    Log "Chrome32 exit code: $($proc.ExitCode)"
+
+    if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
+        throw "Chrome x86 installation failed with exit code $($proc.ExitCode)"
+    }
+}
+
+$post = Detect-Chrome
+
+
+
+
+
+
+
 $argList = "/i `"$installer64`" /qn /norestart /L*v `"$env:ProgramData\IvantiLogs\Chrome64-msi.log`""
 $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList $argList -Wait -PassThru
 
