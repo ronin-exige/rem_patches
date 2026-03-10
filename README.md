@@ -1,3 +1,18 @@
+
+$local = Get-ChildItem -Path $stage -Recurse -Filter $Pattern -EA SilentlyContinue |
+    Sort-Object -Property @{Expression='LastWriteTime';Descending=$true}, @{Expression='Name';Descending=$true} |
+    Select-Object -First 1
+
+$remote = Get-ChildItem -Path $share -Recurse -Filter $Pattern -EA SilentlyContinue |
+    Sort-Object -Property @{Expression='LastWriteTime';Descending=$true}, @{Expression='Name';Descending=$true} |
+    Select-Object -First 1
+
+Log "Remove-OldVersions result for ${NameForLog}: removed=$removed failed=$failed"
+
+
+
+
+
 Nessus Vulnerability Remediation
 Ivanti Automation Playbook v4.2 (Complete Full Sweep)
 March 2026
