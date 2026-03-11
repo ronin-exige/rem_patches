@@ -1,3 +1,59 @@
+Ivanti does not need anything exotic there beyond:
+
+file extension ps1
+
+success exit 0
+
+nonzero on failure if you want the task to show failed
+
+The main thing is to make sure your script ends with:
+
+exit 0
+
+on success, and exit 1 in the catch block if you want Ivanti to mark it failed.
+
+If you want, I can do the same style of literal Ivanti build sheet for the MECM action-cycle follow-up task too.
+
+
+$ns = 'root\ccm'
+
+try {
+    # Pull latest policy first
+    Invoke-CimMethod -Namespace $ns -ClassName SMS_Client -MethodName TriggerSchedule `
+        -Arguments @{sScheduleID='{00000000-0000-0000-0000-000000000021}'} | Out-Null
+    Start-Sleep -Seconds 5
+
+    Invoke-CimMethod -Namespace $ns -ClassName SMS_Client -MethodName TriggerSchedule `
+        -Arguments @{sScheduleID='{00000000-0000-0000-0000-000000000022}'} | Out-Null
+    Start-Sleep -Seconds 5
+
+    # Update compliance
+    Invoke-CimMethod -Namespace $ns -ClassName SMS_Client -MethodName TriggerSchedule `
+        -Arguments @{sScheduleID='{00000000-0000-0000-0000-000000000113}'} | Out-Null
+    Start-Sleep -Seconds 10
+
+    Invoke-CimMethod -Namespace $ns -ClassName SMS_Client -MethodName TriggerSchedule `
+        -Arguments @{sScheduleID='{00000000-0000-0000-0000-000000000108}'} | Out-Null
+    Start-Sleep -Seconds 10
+
+    # Refresh inventory/reporting
+    Invoke-CimMethod -Namespace $ns -ClassName SMS_Client -MethodName TriggerSchedule `
+        -Arguments @{sScheduleID='{00000000-0000-0000-0000-000000000001}'} | Out-Null
+    Start-Sleep -Seconds 10
+
+    # Re-evaluate app deployments too
+    Invoke-CimMethod -Namespace $ns -ClassName SMS_Client -MethodName TriggerSchedule `
+        -Arguments @{sScheduleID='{00000000-0000-0000-0000-000000000121}'} | Out-Null
+
+    Write-Host "MECM scan / inventory / app evaluation triggered"
+    exit 0
+}
+catch {
+    Write-Host "Failed to trigger MECM client cycles: $($_.Exception.Message)"
+    exit 1
+}
+
+
 Absolutely. Here’s a practical **Ivanti build sheet** for a **MECM / WMI Repair SAFE** module, using mostly native actions and only a few short PowerShell steps. It follows the safe flow from your playbook: stop `ccmexec`, `iphlpsvc`, and `Winmgmt`; verify/salvage WMI; recompile MOFs; restart services; verify again; then run MECM client repair.
 
 ## Module name
