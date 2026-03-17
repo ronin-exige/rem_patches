@@ -1,4 +1,4 @@
-function Get-PeArchitecture {
+'''function Get-PeArchitecture {
     param([Parameter(Mandatory)][string]$Path)
     $fs = [System.IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
     try {
@@ -86,11 +86,11 @@ $path = Resolve-BrowserPath -ExeName 'chrome.exe' -DisplayRegex '^(Google Chrome
 if (-not $path) { Write-Output 'NONE'; exit 0 }
 
 Write-Output (Get-PeArchitecture -Path $path)
-exit 0
+exit 0'''
 
 ----------------------------------------------------------
 
-# same helper functions as Chrome version above
+'''# same helper functions as Chrome version above
 
 $path = Resolve-BrowserPath -ExeName 'msedge.exe' -DisplayRegex '^(Microsoft Edge)(\s|$)' -CommonPaths @(
     "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
@@ -101,11 +101,11 @@ $path = Resolve-BrowserPath -ExeName 'msedge.exe' -DisplayRegex '^(Microsoft Edg
 if (-not $path) { Write-Output 'NONE'; exit 0 }
 
 Write-Output (Get-PeArchitecture -Path $path)
-exit 0
+exit 0'''
 
 ---------------------------------------------------------
 
-function Get-PeArchitecture {
+'''function Get-PeArchitecture {
     param([Parameter(Mandatory)][string]$Path)
     $fs = [System.IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
     try {
@@ -191,7 +191,7 @@ $path = Resolve-BrowserPath
 if (-not $path) { Write-Output 'NONE'; exit 0 }
 
 Write-Output (Get-PeArchitecture -Path $path)
-exit 0
+exit 0'''
 
 
 
