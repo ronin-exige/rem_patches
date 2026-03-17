@@ -1,557 +1,200 @@
-Ivanti does not need anything exotic there beyond:
-
-file extension ps1
-
-success exit 0
-
-nonzero on failure if you want the task to show failed
-
-The main thing is to make sure your script ends with:
-
-exit 0
-
-on success, and exit 1 in the catch block if you want Ivanti to mark it failed.
-
-If you want, I can do the same style of literal Ivanti build sheet for the MECM action-cycle follow-up task too.
-
-
-$ns = 'root\ccm'
-
-try {
-    # Pull latest policy first
-    Invoke-CimMethod -Namespace $ns -ClassName SMS_Client -MethodName TriggerSchedule `
-        -Arguments @{sScheduleID='{00000000-0000-0000-0000-000000000021}'} | Out-Null
-    Start-Sleep -Seconds 5
-
-    Invoke-CimMethod -Namespace $ns -ClassName SMS_Client -MethodName TriggerSchedule `
-        -Arguments @{sScheduleID='{00000000-0000-0000-0000-000000000022}'} | Out-Null
-    Start-Sleep -Seconds 5
-
-    # Update compliance
-    Invoke-CimMethod -Namespace $ns -ClassName SMS_Client -MethodName TriggerSchedule `
-        -Arguments @{sScheduleID='{00000000-0000-0000-0000-000000000113}'} | Out-Null
-    Start-Sleep -Seconds 10
-
-    Invoke-CimMethod -Namespace $ns -ClassName SMS_Client -MethodName TriggerSchedule `
-        -Arguments @{sScheduleID='{00000000-0000-0000-0000-000000000108}'} | Out-Null
-    Start-Sleep -Seconds 10
-
-    # Refresh inventory/reporting
-    Invoke-CimMethod -Namespace $ns -ClassName SMS_Client -MethodName TriggerSchedule `
-        -Arguments @{sScheduleID='{00000000-0000-0000-0000-000000000001}'} | Out-Null
-    Start-Sleep -Seconds 10
-
-    # Re-evaluate app deployments too
-    Invoke-CimMethod -Namespace $ns -ClassName SMS_Client -MethodName TriggerSchedule `
-        -Arguments @{sScheduleID='{00000000-0000-0000-0000-000000000121}'} | Out-Null
-
-    Write-Host "MECM scan / inventory / app evaluation triggered"
-    exit 0
-}
-catch {
-    Write-Host "Failed to trigger MECM client cycles: $($_.Exception.Message)"
-    exit 1
+function Get-PeArchitecture {
+    param([Parameter(Mandatory)][string]$Path)
+    $fs = [System.IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
+    try {
+        $br = New-Object System.IO.BinaryReader($fs)
+        $fs.Seek(0x3C, [System.IO.SeekOrigin]::Begin) | Out-Null
+        $peOffset = $br.ReadInt32()
+        $fs.Seek($peOffset + 4, [System.IO.SeekOrigin]::Begin) | Out-Null
+        $machine = $br.ReadUInt16()
+        switch ($machine) {
+            0x014c { '32' }
+            0x8664 { '64' }
+            default { 'NONE' }
+        }
+    } finally { $fs.Dispose() }
 }
 
+function Get-DisplayIconPath {
+    param([string]$DisplayIcon)
+    if ([string]::IsNullOrWhiteSpace($DisplayIcon)) { return $null }
+    $icon = $DisplayIcon.Trim()
+    if ($icon -match '^\s*"([^"]+)"') { return $matches[1] }
+    return ($icon -split ',')[0].Trim()
+}
 
-Absolutely. Here’s a practical **Ivanti build sheet** for a **MECM / WMI Repair SAFE** module, using mostly native actions and only a few short PowerShell steps. It follows the safe flow from your playbook: stop `ccmexec`, `iphlpsvc`, and `Winmgmt`; verify/salvage WMI; recompile MOFs; restart services; verify again; then run MECM client repair.
+function Resolve-BrowserPath {
+    param([string]$ExeName,[string]$DisplayRegex,[string[]]$CommonPaths)
 
-## Module name
+    $candidates = New-Object System.Collections.Generic.List[string]
 
-`MECM - WMI Repair SAFE`
-
-## General notes
-
-* Run as **SYSTEM**
-* Do **not** use this module to do a full repository delete/reset
-* Treat it as a **safe repair** module only
-* For PowerShell tasks, use **file extension `ps1`**
-* Success code for PowerShell tasks: **0**
-* Failure code: anything non-zero
-* For PowerShell tasks that are only informational checks, you can choose whether failure should stop the module or just log and continue
-
----
-
-# Task list
-
-## Task 1
-
-**Type:** Query Service Properties
-**Name:** Query Winmgmt
-**Purpose:** confirm WMI service exists
-
-**Settings**
-
-* Filter by service name:
-
-```text
-Winmgmt
-```
-
-**Failure handling**
-
-* Continue on failure
-
----
-
-## Task 2
-
-**Type:** Query Service Properties
-**Name:** Query CcmExec
-**Purpose:** confirm MECM client service exists
-
-**Settings**
-
-* Filter by service name:
-
-```text
-CcmExec
-```
-
-**Failure handling**
-
-* Continue on failure
-
----
-
-## Task 3
-
-**Type:** Files
-**Name:** Check CCM executable
-**Purpose:** verify MECM client binaries exist
-
-**Settings**
-
-* Path / file to query:
-
-```text
-%SystemRoot%\CCM\CcmExec.exe
-```
-
-**Failure handling**
-
-* Continue on failure
-
----
-
-## Task 4
-
-**Type:** Files
-**Name:** Check WMI repository folder
-**Purpose:** verify repository folder exists
-
-**Settings**
-
-* Path / file to query:
-
-```text
-%SystemRoot%\System32\wbem\Repository
-```
-
-**Failure handling**
-
-* Continue on failure
-
----
-
-## Task 5
-
-**Type:** Windows PowerShell Script
-**Name:** Verify WMI before repair
-**Purpose:** basic health gate
-
-**Script**
-
-```powershell
-try {
-    Get-CimInstance Win32_OperatingSystem -ErrorAction Stop | Out-Null
-    $verify = (winmgmt /verifyrepository 2>&1) -join ' '
-    Write-Host "Verify result: $verify"
-
-    if ($verify -match 'consistent|is consistent') {
-        Write-Host "WMI basic query OK and repository consistent"
-        exit 0
+    foreach ($key in @(
+        "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$ExeName",
+        "Registry::HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$ExeName"
+    )) {
+        try {
+            $item = Get-ItemProperty -Path $key -ErrorAction Stop
+            $path = $item.'(default)'
+            if (-not $path) { $path = $item.Path }
+            if ($path -and (Test-Path -LiteralPath $path)) { $candidates.Add($path) }
+        } catch {}
     }
-    else {
-        Write-Host "Repository inconsistent"
-        exit 1
+
+    foreach ($root in @(
+        'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'Registry::HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'Registry::HKEY_CURRENT_USER\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )) {
+        try {
+            Get-ItemProperty -Path $root -ErrorAction SilentlyContinue | ForEach-Object {
+                if ($_.DisplayName -and ($_.DisplayName -match '^(Google Chrome)(\s|$)')) {
+                    $path = $null
+                    if ($_.InstallLocation) {
+                        $tryExe = Join-Path $_.InstallLocation 'chrome.exe'
+                        if (Test-Path -LiteralPath $tryExe) { $path = $tryExe }
+                    }
+                    if (-not $path -and $_.DisplayIcon) {
+                        $iconPath = Get-DisplayIconPath -DisplayIcon $_.DisplayIcon
+                        if ($iconPath -and (Test-Path -LiteralPath $iconPath)) { $path = $iconPath }
+                    }
+                    if ($path) { $candidates.Add($path) }
+                }
+            }
+        } catch {}
     }
-}
-catch {
-    Write-Host "WMI basic query failed: $($_.Exception.Message)"
-    exit 1
-}
-```
 
-**Ivanti settings**
-
-* File extension: `ps1`
-
-**Failure handling**
-
-* Continue on failure
-  This is a pre-check, so I would not stop the module here.
-
----
-
-## Task 6
-
-**Type:** Service Properties
-**Name:** Stop CcmExec
-**Purpose:** stop MECM client dependency before WMI work
-
-**Settings**
-
-* Service name:
-
-```text
-CcmExec
-```
-
-* Action: **Stop service**
-
-**Failure handling**
-
-* Continue on failure
-
----
-
-## Task 7
-
-**Type:** Service Properties
-**Name:** Stop IP Helper
-**Purpose:** stop dependency used in your playbook flow
-
-**Settings**
-
-* Service name:
-
-```text
-iphlpsvc
-```
-
-* Action: **Stop service**
-
-**Failure handling**
-
-* Continue on failure
-
----
-
-## Task 8
-
-**Type:** Service Properties
-**Name:** Stop Winmgmt
-**Purpose:** stop WMI before salvage/repair
-
-**Settings**
-
-* Service name:
-
-```text
-Winmgmt
-```
-
-* Action: **Stop service**
-
-**Failure handling**
-
-* Continue on failure
-
----
-
-## Task 9
-
-**Type:** Windows PowerShell Script
-**Name:** Salvage WMI repository
-**Purpose:** safe repository repair
-
-**Script**
-
-```powershell
-$verifyBefore = (winmgmt /verifyrepository 2>&1) -join ' '
-Write-Host "Verify before salvage: $verifyBefore"
-
-winmgmt /salvagerepository | Out-Null
-Start-Sleep -Seconds 10
-
-$verifyAfter = (winmgmt /verifyrepository 2>&1) -join ' '
-Write-Host "Verify after salvage: $verifyAfter"
-
-if ($verifyAfter -match 'consistent|is consistent') {
-    exit 0
-}
-else {
-    exit 1
-}
-```
-
-**Ivanti settings**
-
-* File extension: `ps1`
-
-**Failure handling**
-
-* Continue on failure
-  I would still continue, because Task 10 and later steps may still help even if salvage does not fully clean it up.
-
----
-
-## Task 10
-
-**Type:** Windows PowerShell Script
-**Name:** Recompile WMI MOFs
-**Purpose:** rebuild MOF registrations as in the playbook
-
-**Script**
-
-```powershell
-$mofDir = "$env:SystemRoot\System32\wbem"
-
-Get-ChildItem $mofDir -Filter "*.mof" -ErrorAction SilentlyContinue | ForEach-Object {
-    mofcomp.exe $_.FullName | Out-Null
-}
-Get-ChildItem $mofDir -Filter "*.mfl" -ErrorAction SilentlyContinue | ForEach-Object {
-    mofcomp.exe $_.FullName | Out-Null
-}
-
-Write-Host "MOF recompilation complete"
-exit 0
-```
-
-**Ivanti settings**
-
-* File extension: `ps1`
-
-**Failure handling**
-
-* Continue on failure
-
----
-
-## Task 11
-
-**Type:** Service Properties
-**Name:** Start Winmgmt
-**Purpose:** bring WMI back up
-
-**Settings**
-
-* Service name:
-
-```text
-Winmgmt
-```
-
-* Action: **Start service**
-
-**Failure handling**
-
-* Stop on failure
-  This one matters.
-
----
-
-## Task 12
-
-**Type:** Service Properties
-**Name:** Start CcmExec
-**Purpose:** bring MECM client back up
-
-**Settings**
-
-* Service name:
-
-```text
-CcmExec
-```
-
-* Action: **Start service**
-
-**Failure handling**
-
-* Continue on failure
-  You may want this to continue so later checks can show you what failed.
-
----
-
-## Task 13
-
-**Type:** Windows PowerShell Script
-**Name:** Verify WMI after repair
-**Purpose:** confirm WMI is queryable after repair
-
-**Script**
-
-```powershell
-try {
-    Get-CimInstance Win32_OperatingSystem -ErrorAction Stop | Out-Null
-    $verify = (winmgmt /verifyrepository 2>&1) -join ' '
-    Write-Host "Post-repair verify: $verify"
-
-    if ($verify -match 'consistent|is consistent') {
-        exit 0
+    foreach ($path in @(
+        "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+        "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+        "$env:LocalAppData\Google\Chrome\Application\chrome.exe"
+    )) {
+        if ($path -and (Test-Path -LiteralPath $path)) { $candidates.Add($path) }
     }
-    else {
-        exit 1
+
+    $seen = @{}
+    foreach ($p in $candidates) {
+        if (-not $seen.ContainsKey($p)) {
+            $seen[$p] = $true
+            return $p
+        }
     }
+    return $null
 }
-catch {
-    Write-Host "Post-repair WMI query failed: $($_.Exception.Message)"
-    exit 1
+
+$path = Resolve-BrowserPath -ExeName 'chrome.exe' -DisplayRegex '^(Google Chrome)(\s|$)' -CommonPaths @()
+if (-not $path) { Write-Output 'NONE'; exit 0 }
+
+Write-Output (Get-PeArchitecture -Path $path)
+exit 0
+
+----------------------------------------------------------
+
+# same helper functions as Chrome version above
+
+$path = Resolve-BrowserPath -ExeName 'msedge.exe' -DisplayRegex '^(Microsoft Edge)(\s|$)' -CommonPaths @(
+    "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
+    "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
+    "$env:LocalAppData\Microsoft\Edge\Application\msedge.exe"
+)
+
+if (-not $path) { Write-Output 'NONE'; exit 0 }
+
+Write-Output (Get-PeArchitecture -Path $path)
+exit 0
+
+---------------------------------------------------------
+
+function Get-PeArchitecture {
+    param([Parameter(Mandatory)][string]$Path)
+    $fs = [System.IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
+    try {
+        $br = New-Object System.IO.BinaryReader($fs)
+        $fs.Seek(0x3C, [System.IO.SeekOrigin]::Begin) | Out-Null
+        $peOffset = $br.ReadInt32()
+        $fs.Seek($peOffset + 4, [System.IO.SeekOrigin]::Begin) | Out-Null
+        $machine = $br.ReadUInt16()
+        switch ($machine) {
+            0x014c { '32' }
+            0x8664 { '64' }
+            default { 'NONE' }
+        }
+    } finally { $fs.Dispose() }
 }
-```
 
-**Ivanti settings**
+function Get-DisplayIconPath {
+    param([string]$DisplayIcon)
+    if ([string]::IsNullOrWhiteSpace($DisplayIcon)) { return $null }
+    $icon = $DisplayIcon.Trim()
+    if ($icon -match '^\s*"([^"]+)"') { return $matches[1] }
+    return ($icon -split ',')[0].Trim()
+}
 
-* File extension: `ps1`
+function Resolve-BrowserPath {
+    $candidates = New-Object System.Collections.Generic.List[string]
 
-**Failure handling**
+    foreach ($key in @(
+        "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe",
+        "Registry::HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe"
+    )) {
+        try {
+            $item = Get-ItemProperty -Path $key -ErrorAction Stop
+            $path = $item.'(default)'
+            if (-not $path) { $path = $item.Path }
+            if ($path -and (Test-Path -LiteralPath $path)) { $candidates.Add($path) }
+        } catch {}
+    }
 
-* Continue on failure
+    foreach ($root in @(
+        'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'Registry::HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'Registry::HKEY_CURRENT_USER\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )) {
+        try {
+            Get-ItemProperty -Path $root -ErrorAction SilentlyContinue | ForEach-Object {
+                if ($_.DisplayName -and ($_.DisplayName -match '^(Mozilla Firefox|Firefox)( ESR)?(\s|$)')) {
+                    $path = $null
+                    if ($_.InstallLocation) {
+                        $tryExe = Join-Path $_.InstallLocation 'firefox.exe'
+                        if (Test-Path -LiteralPath $tryExe) { $path = $tryExe }
+                    }
+                    if (-not $path -and $_.DisplayIcon) {
+                        $iconPath = Get-DisplayIconPath -DisplayIcon $_.DisplayIcon
+                        if ($iconPath -and (Test-Path -LiteralPath $iconPath)) { $path = $iconPath }
+                    }
+                    if ($path) { $candidates.Add($path) }
+                }
+            }
+        } catch {}
+    }
 
----
+    foreach ($path in @(
+        "$env:ProgramFiles\Mozilla Firefox\firefox.exe",
+        "${env:ProgramFiles(x86)}\Mozilla Firefox\firefox.exe",
+        "$env:LocalAppData\Mozilla Firefox\firefox.exe"
+    )) {
+        if ($path -and (Test-Path -LiteralPath $path)) { $candidates.Add($path) }
+    }
 
-## Task 14
+    $seen = @{}
+    foreach ($p in $candidates) {
+        if (-not $seen.ContainsKey($p)) {
+            $seen[$p] = $true
+            return $p
+        }
+    }
+    return $null
+}
 
-**Type:** Files
-**Name:** Check ccmrepair exists
-**Purpose:** confirm repair executable exists before launching it
+$path = Resolve-BrowserPath
+if (-not $path) { Write-Output 'NONE'; exit 0 }
 
-**Settings**
-
-* Path / file to query:
-
-```text
-%SystemRoot%\CCM\ccmrepair.exe
-```
-
-**Failure handling**
-
-* Continue on failure
-
----
-
-## Task 15
-
-**Type:** Execute Program / File task
-**Name:** Run ccmrepair
-**Purpose:** trigger MECM client repair after WMI repair
-
-**Program / file**
-
-```text
-%SystemRoot%\CCM\ccmrepair.exe
-```
-
-**Arguments**
-
-* none
-
-**Success codes**
-
-* `0`
-
-**Failure handling**
-
-* Continue on failure
-  I would continue so you can still inspect services / logs afterward.
-
----
-
-## Task 16
-
-**Type:** Query Service Properties
-**Name:** Verify CcmExec after repair
-**Purpose:** quick confirmation MECM service is back
-
-**Settings**
-
-* Filter by service name:
-
-```text
-CcmExec
-```
-
-**Failure handling**
-
-* Continue on failure
-
----
-
-# Recommended task order summary
-
-1. Query Winmgmt
-2. Query CcmExec
-3. Check `CcmExec.exe`
-4. Check WMI repository folder
-5. Verify WMI before repair
-6. Stop CcmExec
-7. Stop IP Helper
-8. Stop Winmgmt
-9. Salvage WMI repository
-10. Recompile WMI MOFs
-11. Start Winmgmt
-12. Start CcmExec
-13. Verify WMI after repair
-14. Check `ccmrepair.exe`
-15. Run `ccmrepair.exe`
-16. Verify CcmExec after repair
-
----
-
-# Optional tiny improvements
-
-## Add a wait after starting Winmgmt
-
-If you want one extra stability step, insert a PowerShell task between Task 11 and Task 12:
-
-**Name:** Wait for WMI service settle
-
-```powershell
-Start-Sleep -Seconds 10
+Write-Output (Get-PeArchitecture -Path $path)
 exit 0
-```
 
-That is not required, but it can make the restart sequence a little less twitchy.
 
-## Add a wait after ccmrepair
 
-If you want a cleaner post-check, insert another tiny PowerShell task after Task 15:
 
-```powershell
-Start-Sleep -Seconds 20
-exit 0
-```
 
----
 
-# What not to put in this SAFE module
-
-Do **not** add:
-
-* `winmgmt /resetrepository`
-* deleting `%SystemRoot%\System32\wbem\Repository`
-* blanket `regsvr32` loops across every DLL in the folder
-
-Those belong in a separate **last resort** module, not the safe one. Your playbook only escalates to reset when salvage still fails, and explicitly warns that full reset means the MECM client may need reinstall.
-
----
-
-# For your browser module follow-up PowerShell task
-
-You were right — a single PowerShell action at the end is fine. Ivanti does not need anything exotic there beyond:
-
-* file extension `ps1`
-* success exit `0`
-* nonzero on failure if you want the task to show failed
-
-The main thing is to make sure your script ends with:
-
-```powershell
-exit 0
-```
-
-on success, and `exit 1` in the catch block if you want Ivanti to mark it failed.
-
-If you want, I can do the same style of **literal Ivanti build sheet** for the MECM action-cycle follow-up task too.
