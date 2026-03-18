@@ -1,3 +1,43 @@
+
+```
+$target = [version]'146.0.7680.80'
+$update = 'No'
+
+$roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+    'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+    'HKCU:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+)
+
+$apps = foreach ($root in $roots) {
+    Get-ItemProperty -Path $root -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -like 'Google Chrome*' }
+}
+
+$versions = @()
+foreach ($app in $apps) {
+    try {
+        if ($app.DisplayVersion) {
+            $versions += [version]$app.DisplayVersion
+        }
+    } catch {}
+}
+
+if ($versions.Count -gt 0) {
+    $installed = $versions | Sort-Object -Descending | Select-Object -First 1
+    if ($installed -lt $target) {
+        $update = 'Yes'
+    }
+}
+
+Write-Output $update
+exit 0
+```
+
+
+
+
 chrome test:
 
 ```
