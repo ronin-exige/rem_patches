@@ -2,26 +2,23 @@
 ```
 $target = [version]'146.0.7680.80'
 $update = 'No'
+$versions = @()
 
-$roots = @(
-    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
-    'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-    'HKCU:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+$paths = @(
+    "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+    "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
 )
 
-$apps = foreach ($root in $roots) {
-    Get-ItemProperty -Path $root -ErrorAction SilentlyContinue |
-        Where-Object { $_.DisplayName -like 'Google Chrome*' }
-}
-
-$versions = @()
-foreach ($app in $apps) {
-    try {
-        if ($app.DisplayVersion) {
-            $versions += [version]$app.DisplayVersion
-        }
-    } catch {}
+foreach ($path in $paths) {
+    if (Test-Path -LiteralPath $path) {
+        try {
+            $raw = (Get-Item -LiteralPath $path).VersionInfo.FileVersion
+            $clean = $raw -replace '[^0-9.]', ''
+            if ($clean) {
+                $versions += [version]$clean
+            }
+        } catch {}
+    }
 }
 
 if ($versions.Count -gt 0) {
