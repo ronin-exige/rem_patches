@@ -1,700 +1,566 @@
+Absolutely. Here’s a practical Ivanti build sheet for a MECM / WMI Repair SAFE module, using mostly native actions and only a few short PowerShell steps. It follows the safe flow from your playbook: stop ccmexec, iphlpsvc, and Winmgmt; verify/salvage WMI; recompile MOFs; restart services; verify again; then run MECM client repair.
 
-```
-$target = [version]'146.0.7680.80'
-$update = 'No'
-$versions = @()
+Module name
 
-$paths = @(
-    "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
-    "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
-)
+MECM - WMI Repair SAFE
 
-foreach ($path in $paths) {
-    if (Test-Path -LiteralPath $path) {
-        try {
-            $raw = (Get-Item -LiteralPath $path).VersionInfo.FileVersion
-            $clean = $raw -replace '[^0-9.]', ''
-            if ($clean) {
-                $versions += [version]$clean
-            }
-        } catch {}
+General notes
+
+Run as SYSTEM
+
+Do not use this module to do a full repository delete/reset
+
+Treat it as a safe repair module only
+
+For PowerShell tasks, use file extension ps1
+
+Success code for PowerShell tasks: 0
+
+Failure code: anything non-zero
+
+For PowerShell tasks that are only informational checks, you can choose whether failure should stop the module or just log and continue
+
+
+
+---
+
+Task list
+
+Task 1
+
+Type: Query Service Properties
+Name: Query Winmgmt
+Purpose: confirm WMI service exists
+
+Settings
+
+Filter by service name:
+
+
+Winmgmt
+
+Failure handling
+
+Continue on failure
+
+
+
+---
+
+Task 2
+
+Type: Query Service Properties
+Name: Query CcmExec
+Purpose: confirm MECM client service exists
+
+Settings
+
+Filter by service name:
+
+
+CcmExec
+
+Failure handling
+
+Continue on failure
+
+
+
+---
+
+Task 3
+
+Type: Files
+Name: Check CCM executable
+Purpose: verify MECM client binaries exist
+
+Settings
+
+Path / file to query:
+
+
+%SystemRoot%\CCM\CcmExec.exe
+
+Failure handling
+
+Continue on failure
+
+
+
+---
+
+Task 4
+
+Type: Files
+Name: Check WMI repository folder
+Purpose: verify repository folder exists
+
+Settings
+
+Path / file to query:
+
+
+%SystemRoot%\System32\wbem\Repository
+
+Failure handling
+
+Continue on failure
+
+
+
+---
+
+Task 5
+
+Type: Windows PowerShell Script
+Name: Verify WMI before repair
+Purpose: basic health gate
+
+Script
+
+try {
+    Get-CimInstance Win32_OperatingSystem -ErrorAction Stop | Out-Null
+    $verify = (winmgmt /verifyrepository 2>&1) -join ' '
+    Write-Host "Verify result: $verify"
+
+    if ($verify -match 'consistent|is consistent') {
+        Write-Host "WMI basic query OK and repository consistent"
+        exit 0
+    }
+    else {
+        Write-Host "Repository inconsistent"
+        exit 1
     }
 }
-
-if ($versions.Count -gt 0) {
-    $installed = $versions | Sort-Object -Descending | Select-Object -First 1
-    if ($installed -lt $target) {
-        $update = 'Yes'
-    }
+catch {
+    Write-Host "WMI basic query failed: $($_.Exception.Message)"
+    exit 1
 }
 
-Write-Output $update
-exit 0
-```
+Ivanti settings
+
+File extension: ps1
+
+
+Failure handling
+
+Continue on failure
+This is a pre-check, so I would not stop the module here.
 
 
 
+---
 
-chrome test:
+Task 6
 
-```
-Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*,
-HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* |
-Where-Object { $_.DisplayName -like "Google Chrome*" } |
-Select-Object DisplayName, DisplayVersion
-```
+Type: Service Properties
+Name: Stop CcmExec
+Purpose: stop MECM client dependency before WMI work
 
-```
-Test-Path "$env:ProgramFiles\Google\Chrome"
-Test-Path "${env:ProgramFiles(x86)}\Google\Chrome"
-```
+Settings
 
-safe nuke:
-```
+Service name:
 
-# =========================
-# Nuke Google Chrome / Chrome Enterprise from Windows
-# Run as Administrator
-# =========================
 
-#Requires -RunAsAdministrator
+CcmExec
 
-# --- Configuration ---
-$LogFile = "$env:ProgramData\Logs\ChromeNuke_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
-$DryRun  = $false   # Set to $true to log actions without executing destructive operations
+Action: Stop service
 
-# --- Logging ---
-function Log {
-    param(
-        [string]$Message,
-        [ValidateSet("INFO","WARN","ERROR","SUCCESS")]
-        [string]$Level = "INFO"
-    )
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $entry = "[$timestamp] [$Level] $Message"
 
-    # Ensure log directory exists
-    $logDir = Split-Path $LogFile -Parent
-    if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+Failure handling
 
-    Add-Content -Path $LogFile -Value $entry
+Continue on failure
 
-    $color = switch ($Level) {
-        "INFO"    { "Cyan" }
-        "WARN"    { "Yellow" }
-        "ERROR"   { "Red" }
-        "SUCCESS" { "Green" }
-    }
-    Write-Host $entry -ForegroundColor $color
-}
 
-# --- Pre-flight checks ---
-Log "Chrome Nuke script starting. DryRun=$DryRun" "INFO"
-Log "Logging to: $LogFile" "INFO"
 
-$chromeInstalled = (
-    (Test-Path "$env:ProgramFiles\Google\Chrome") -or
-    (Test-Path "${env:ProgramFiles(x86)}\Google\Chrome") -or
-    (Test-Path "$env:LocalAppData\Google\Chrome")
-)
+---
 
-if (-not $chromeInstalled) {
-    Log "No Chrome installation detected. Exiting." "WARN"
+Task 7
+
+Type: Service Properties
+Name: Stop IP Helper
+Purpose: stop dependency used in your playbook flow
+
+Settings
+
+Service name:
+
+
+iphlpsvc
+
+Action: Stop service
+
+
+Failure handling
+
+Continue on failure
+
+
+
+---
+
+Task 8
+
+Type: Service Properties
+Name: Stop Winmgmt
+Purpose: stop WMI before salvage/repair
+
+Settings
+
+Service name:
+
+
+Winmgmt
+
+Action: Stop service
+
+
+Failure handling
+
+Continue on failure
+
+
+
+---
+
+Task 9
+
+Type: Windows PowerShell Script
+Name: Salvage WMI repository
+Purpose: safe repository repair
+
+Script
+
+$verifyBefore = (winmgmt /verifyrepository 2>&1) -join ' '
+Write-Host "Verify before salvage: $verifyBefore"
+
+winmgmt /salvagerepository | Out-Null
+Start-Sleep -Seconds 10
+
+$verifyAfter = (winmgmt /verifyrepository 2>&1) -join ' '
+Write-Host "Verify after salvage: $verifyAfter"
+
+if ($verifyAfter -match 'consistent|is consistent') {
     exit 0
 }
-
-# ============================================================
-# 1. Kill Chrome and Google Update processes (scoped by path)
-# ============================================================
-Log "== Killing Chrome and Google Update processes ==" "INFO"
-
-# These are safe to kill by name — they are Chrome/Google-specific
-$safeProcessNames = @(
-    "chrome",
-    "GoogleCrashHandler",
-    "GoogleCrashHandler64",
-    "GoogleUpdate",
-    "GoogleUpdateOnDemand"
-)
-
-foreach ($p in $safeProcessNames) {
-    $procs = Get-Process -Name $p -ErrorAction SilentlyContinue
-    if ($procs) {
-        foreach ($proc in $procs) {
-            Log "Killing process: $($proc.Name) (PID $($proc.Id))" "INFO"
-            if (-not $DryRun) { $proc | Stop-Process -Force -ErrorAction SilentlyContinue }
-        }
-    }
+else {
+    exit 1
 }
 
-# For generic names, only kill if the process image path is under a Google directory
-$genericProcessNames = @("setup", "installer", "msedgewebview2")
-foreach ($p in $genericProcessNames) {
-    $procs = Get-Process -Name $p -ErrorAction SilentlyContinue
-    if ($procs) {
-        foreach ($proc in $procs) {
-            try {
-                $procPath = $proc.Path
-                if ($procPath -and ($procPath -match "\\Google\\")) {
-                    Log "Killing Google-owned process: $($proc.Name) (PID $($proc.Id)) at $procPath" "INFO"
-                    if (-not $DryRun) { $proc | Stop-Process -Force }
-                } else {
-                    Log "Skipping non-Google process: $($proc.Name) (PID $($proc.Id)) at $procPath" "WARN"
-                }
-            } catch {
-                Log "Could not inspect process $($proc.Name) (PID $($proc.Id)): $($_.Exception.Message)" "WARN"
-            }
-        }
-    }
+Ivanti settings
+
+File extension: ps1
+
+
+Failure handling
+
+Continue on failure
+I would still continue, because Task 10 and later steps may still help even if salvage does not fully clean it up.
+
+
+
+---
+
+Task 10
+
+Type: Windows PowerShell Script
+Name: Recompile WMI MOFs
+Purpose: rebuild MOF registrations as in the playbook
+
+Script
+
+$mofDir = "$env:SystemRoot\System32\wbem"
+
+Get-ChildItem $mofDir -Filter "*.mof" -ErrorAction SilentlyContinue | ForEach-Object {
+    mofcomp.exe $_.FullName | Out-Null
+}
+Get-ChildItem $mofDir -Filter "*.mfl" -ErrorAction SilentlyContinue | ForEach-Object {
+    mofcomp.exe $_.FullName | Out-Null
 }
 
-# ============================================================
-# 2. Stop and disable Google Update services
-# ============================================================
-Log "== Stopping Google Update services ==" "INFO"
-$serviceNames = @("gupdate", "gupdatem")
-foreach ($svc in $serviceNames) {
-    $service = Get-Service -Name $svc -ErrorAction SilentlyContinue
-    if ($service) {
-        Log "Stopping and disabling service: $svc (Status: $($service.Status))" "INFO"
-        if (-not $DryRun) {
-            Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
-            sc.exe config $svc start= disabled | Out-Null
-        }
-    }
-}
-
-# ============================================================
-# 3. Remove Google scheduled tasks
-# ============================================================
-Log "== Removing Google scheduled tasks ==" "INFO"
-$taskPaths = @(
-    "\GoogleUpdateTaskMachineCore",
-    "\GoogleUpdateTaskMachineUA",
-    "\GoogleSystem",
-    "\GoogleUpdaterTaskSystem*",
-    "\GoogleUpdaterTaskUser*"
-)
-
-foreach ($tp in $taskPaths) {
-    $result = schtasks.exe /Query /TN $tp 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Log "Deleting scheduled task: $tp" "INFO"
-        if (-not $DryRun) { schtasks.exe /Delete /TN $tp /F | Out-Null }
-    }
-}
-
-# ============================================================
-# 4. Remove Chrome uninstall registry entries
-# ============================================================
-Log "== Removing Chrome uninstall registry entries ==" "INFO"
-
-$uninstallRoots = @(
-    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
-    "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
-)
-
-foreach ($root in $uninstallRoots) {
-    if (Test-Path $root) {
-        Get-ChildItem $root | ForEach-Object {
-            $item = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
-            $name = $item.DisplayName
-
-            if (
-                ($name -like "Google Chrome*") -or
-                ($name -like "*Chrome Enterprise*") -or
-                ($name -like "*Google Update*")
-            ) {
-                Log "Removing uninstall key: $($_.PSChildName) / $name" "INFO"
-                if (-not $DryRun) { Remove-Item $_.PSPath -Recurse -Force }
-            }
-        }
-    }
-}
-
-# ============================================================
-# 5. Remove Installer product references for Chrome
-# ============================================================
-Log "== Removing Installer product references ==" "INFO"
-
-$installerRoots = @(
-    "HKLM:\SOFTWARE\Classes\Installer\Products",
-    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Products",
-    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Components"
-)
-
-foreach ($root in $installerRoots) {
-    if (Test-Path $root) {
-        Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object {
-            $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
-            # Match on ProductName or known value properties rather than entire Out-String blob
-            $productName = $props.ProductName
-            $displayName = $props.DisplayName
-            $combined = "$productName $displayName"
-
-            if ($combined -match "Google Chrome|Chrome Enterprise|Google Update") {
-                Log "Removing installer key: $($_.PSChildName) (matched: $combined)" "INFO"
-                if (-not $DryRun) { Remove-Item $_.PSPath -Recurse -Force }
-            }
-        }
-    }
-}
-
-# ============================================================
-# 6. Remove Chrome / Google registry keys
-# ============================================================
-Log "== Removing Google registry keys ==" "INFO"
-$regPaths = @(
-    "HKLM:\SOFTWARE\Google",
-    "HKLM:\SOFTWARE\WOW6432Node\Google",
-    "HKCU:\SOFTWARE\Google",
-    "HKLM:\SOFTWARE\Policies\Google",
-    "HKCU:\SOFTWARE\Policies\Google"
-)
-
-foreach ($rp in $regPaths) {
-    if (Test-Path $rp) {
-        Log "Removing registry path: $rp" "INFO"
-        if (-not $DryRun) { Remove-Item $rp -Recurse -Force }
-    }
-}
-
-# ============================================================
-# 7. Remove Chrome / Google files and directories
-# ============================================================
-Log "== Removing Chrome / Google files ==" "INFO"
-$filePaths = @(
-    "$env:ProgramFiles\Google\Chrome",
-    "${env:ProgramFiles(x86)}\Google\Chrome",
-    "$env:ProgramFiles\Google\Update",
-    "${env:ProgramFiles(x86)}\Google\Update",
-    "$env:ProgramData\Google",
-    "$env:LocalAppData\Google\Chrome",
-    "$env:LocalAppData\Google\Update",
-    "$env:AppData\Google\Chrome"
-)
-
-foreach ($fp in $filePaths) {
-    if (Test-Path $fp) {
-        Log "Removing directory: $fp" "INFO"
-        if (-not $DryRun) {
-            try {
-                Remove-Item $fp -Recurse -Force -ErrorAction Stop
-            } catch {
-                Log "PowerShell remove failed for $fp, falling back to rmdir" "WARN"
-                cmd /c "rmdir /s /q `"$fp`"" 2>&1 | Out-Null
-                if (Test-Path $fp) {
-                    Log "Failed to fully remove: $fp (may require reboot)" "ERROR"
-                } else {
-                    Log "rmdir fallback succeeded for: $fp" "INFO"
-                }
-            }
-        }
-    }
-}
-
-# ============================================================
-# 8. Remove Start Menu and Desktop shortcuts
-# ============================================================
-Log "== Removing Chrome shortcuts ==" "INFO"
-$shortcutPaths = @(
-    "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Google Chrome.lnk",
-    "$env:AppData\Microsoft\Windows\Start Menu\Programs\Google Chrome.lnk",
-    "$env:Public\Desktop\Google Chrome.lnk",
-    "$env:UserProfile\Desktop\Google Chrome.lnk"
-)
-foreach ($sp in $shortcutPaths) {
-    if (Test-Path $sp) {
-        Log "Removing shortcut: $sp" "INFO"
-        if (-not $DryRun) { Remove-Item $sp -Force -ErrorAction SilentlyContinue }
-    }
-}
-
-# ============================================================
-# 9. Remove Google Update services from SCM
-# ============================================================
-Log "== Removing Google Update services from SCM ==" "INFO"
-foreach ($svc in @("gupdate", "gupdatem")) {
-    $exists = sc.exe query $svc 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Log "Deleting service from SCM: $svc" "INFO"
-        if (-not $DryRun) { sc.exe delete $svc | Out-Null }
-    }
-}
-
-# ============================================================
-# Summary
-# ============================================================
-Log "====================================" "SUCCESS"
-Log "Chrome nuke pass complete." "SUCCESS"
-if ($DryRun) {
-    Log "DRY RUN — no changes were made. Review log and re-run with DryRun=`$false" "WARN"
-}
-Log "REBOOT recommended before reinstalling Chrome." "SUCCESS"
-Log "Log saved to: $LogFile" "INFO"
-```
-
-
-```
-function Get-PeArchitecture {
-    param([Parameter(Mandatory)][string]$Path)
-    $fs = [System.IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
-    try {
-        $br = New-Object System.IO.BinaryReader($fs)
-        $fs.Seek(0x3C, [System.IO.SeekOrigin]::Begin) | Out-Null
-        $peOffset = $br.ReadInt32()
-        $fs.Seek($peOffset + 4, [System.IO.SeekOrigin]::Begin) | Out-Null
-        $machine = $br.ReadUInt16()
-        switch ($machine) {
-            0x014c { '32' }
-            0x8664 { '64' }
-            default { 'NONE' }
-        }
-    } finally { $fs.Dispose() }
-}
-
-function Get-DisplayIconPath {
-    param([string]$DisplayIcon)
-    if ([string]::IsNullOrWhiteSpace($DisplayIcon)) { return $null }
-    $icon = $DisplayIcon.Trim()
-    if ($icon -match '^\s*"([^"]+)"') { return $matches[1] }
-    return ($icon -split ',')[0].Trim()
-}
-
-function Resolve-BrowserPath {
-    param([string]$ExeName,[string]$DisplayRegex,[string[]]$CommonPaths)
-
-    $candidates = New-Object System.Collections.Generic.List[string]
-
-    foreach ($key in @(
-        "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$ExeName",
-        "Registry::HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$ExeName"
-    )) {
-        try {
-            $item = Get-ItemProperty -Path $key -ErrorAction Stop
-            $path = $item.'(default)'
-            if (-not $path) { $path = $item.Path }
-            if ($path -and (Test-Path -LiteralPath $path)) { $candidates.Add($path) }
-        } catch {}
-    }
-
-    foreach ($root in @(
-        'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-        'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
-        'Registry::HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-        'Registry::HKEY_CURRENT_USER\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
-    )) {
-        try {
-            Get-ItemProperty -Path $root -ErrorAction SilentlyContinue | ForEach-Object {
-                if ($_.DisplayName -and ($_.DisplayName -match '^(Google Chrome)(\s|$)')) {
-                    $path = $null
-                    if ($_.InstallLocation) {
-                        $tryExe = Join-Path $_.InstallLocation 'chrome.exe'
-                        if (Test-Path -LiteralPath $tryExe) { $path = $tryExe }
-                    }
-                    if (-not $path -and $_.DisplayIcon) {
-                        $iconPath = Get-DisplayIconPath -DisplayIcon $_.DisplayIcon
-                        if ($iconPath -and (Test-Path -LiteralPath $iconPath)) { $path = $iconPath }
-                    }
-                    if ($path) { $candidates.Add($path) }
-                }
-            }
-        } catch {}
-    }
-
-    foreach ($path in @(
-        "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
-        "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
-        "$env:LocalAppData\Google\Chrome\Application\chrome.exe"
-    )) {
-        if ($path -and (Test-Path -LiteralPath $path)) { $candidates.Add($path) }
-    }
-
-    $seen = @{}
-    foreach ($p in $candidates) {
-        if (-not $seen.ContainsKey($p)) {
-            $seen[$p] = $true
-            return $p
-        }
-    }
-    return $null
-}
-
-$path = Resolve-BrowserPath -ExeName 'chrome.exe' -DisplayRegex '^(Google Chrome)(\s|$)' -CommonPaths @()
-if (-not $path) { Write-Output 'NONE'; exit 0 }
-
-Write-Output (Get-PeArchitecture -Path $path)
+Write-Host "MOF recompilation complete"
 exit 0
-```
-------------------------------------------------------------
 
-giga nuke:
-```
-# =========================
-# Nuke Google Chrome / Chrome Enterprise from Windows
-# TEST/LAB USE ONLY
-# Run as Administrator
-# =========================
+Ivanti settings
 
-$ErrorActionPreference = "SilentlyContinue"
+File extension: ps1
 
-Write-Host "== Killing Chrome and Google Update processes ==" -ForegroundColor Cyan
-$procNames = @(
-    "chrome",
-    "msedgewebview2",
-    "GoogleCrashHandler",
-    "GoogleCrashHandler64",
-    "GoogleUpdate",
-    "GoogleUpdateOnDemand",
-    "setup",
-    "installer"
-)
 
-foreach ($p in $procNames) {
-    Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force
-}
+Failure handling
 
-Write-Host "== Stopping Google Update services ==" -ForegroundColor Cyan
-$serviceNames = @("gupdate", "gupdatem")
-foreach ($svc in $serviceNames) {
-    if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
-        Stop-Service -Name $svc -Force
-        sc.exe config $svc start= disabled | Out-Null
+Continue on failure
+
+
+
+---
+
+Task 11
+
+Type: Service Properties
+Name: Start Winmgmt
+Purpose: bring WMI back up
+
+Settings
+
+Service name:
+
+
+Winmgmt
+
+Action: Start service
+
+
+Failure handling
+
+Stop on failure
+This one matters.
+
+
+
+---
+
+Task 12
+
+Type: Service Properties
+Name: Start CcmExec
+Purpose: bring MECM client back up
+
+Settings
+
+Service name:
+
+
+CcmExec
+
+Action: Start service
+
+
+Failure handling
+
+Continue on failure
+You may want this to continue so later checks can show you what failed.
+
+
+
+---
+
+Task 13
+
+Type: Windows PowerShell Script
+Name: Verify WMI after repair
+Purpose: confirm WMI is queryable after repair
+
+Script
+
+try {
+    Get-CimInstance Win32_OperatingSystem -ErrorAction Stop | Out-Null
+    $verify = (winmgmt /verifyrepository 2>&1) -join ' '
+    Write-Host "Post-repair verify: $verify"
+
+    if ($verify -match 'consistent|is consistent') {
+        exit 0
+    }
+    else {
+        exit 1
     }
 }
-
-Write-Host "== Removing Google scheduled tasks ==" -ForegroundColor Cyan
-$taskPaths = @(
-    "\GoogleUpdateTaskMachineCore",
-    "\GoogleUpdateTaskMachineUA",
-    "\GoogleSystem",
-    "\GoogleUpdaterTaskSystem*",
-    "\GoogleUpdaterTaskUser*"
-)
-
-foreach ($tp in $taskPaths) {
-    schtasks.exe /Delete /TN $tp /F | Out-Null
+catch {
+    Write-Host "Post-repair WMI query failed: $($_.Exception.Message)"
+    exit 1
 }
 
-Write-Host "== Attempting MSI uninstall entries removal ==" -ForegroundColor Cyan
+Ivanti settings
 
-# Common uninstall registry paths
-$uninstallRoots = @(
-    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
-    "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
-)
-
-# Remove uninstall entries that match Chrome / Google Update
-foreach ($root in $uninstallRoots) {
-    if (Test-Path $root) {
-        Get-ChildItem $root | ForEach-Object {
-            $item = Get-ItemProperty $_.PSPath
-            $name = $item.DisplayName
-            $publisher = $item.Publisher
-            $uninstallString = $item.UninstallString
-            $quietUninstallString = $item.QuietUninstallString
-
-            if (
-                ($name -like "Google Chrome*") -or
-                ($name -like "*Chrome Enterprise*") -or
-                ($name -like "*Google Update*") -or
-                ($publisher -like "Google*")
-            ) {
-                Write-Host "Removing uninstall key: $($_.PSChildName) / $name" -ForegroundColor Yellow
-                Remove-Item $_.PSPath -Recurse -Force
-            }
-        }
-    }
-}
-
-Write-Host "== Removing Installer product references mentioning Chrome ==" -ForegroundColor Cyan
-
-# Installer\UserData uninstall/product references
-$installerRoots = @(
-    "HKLM:\SOFTWARE\Classes\Installer\Products",
-    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Products",
-    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Components"
-)
-
-foreach ($root in $installerRoots) {
-    if (Test-Path $root) {
-        Get-ChildItem $root | ForEach-Object {
-            $props = Get-ItemProperty $_.PSPath
-            $text = ($props | Out-String)
-            if ($text -match "Google Chrome|Chrome Enterprise|Google Update") {
-                Write-Host "Removing installer key: $($_.PSPath)" -ForegroundColor Yellow
-                Remove-Item $_.PSPath -Recurse -Force
-            }
-        }
-    }
-}
-
-Write-Host "== Removing Chrome / Google registry keys ==" -ForegroundColor Cyan
-$regPaths = @(
-    "HKLM:\SOFTWARE\Google",
-    "HKLM:\SOFTWARE\WOW6432Node\Google",
-    "HKCU:\SOFTWARE\Google",
-    "HKLM:\SOFTWARE\Policies\Google",
-    "HKCU:\SOFTWARE\Policies\Google"
-)
-
-foreach ($rp in $regPaths) {
-    if (Test-Path $rp) {
-        Write-Host "Removing $rp" -ForegroundColor Yellow
-        Remove-Item $rp -Recurse -Force
-    }
-}
-
-Write-Host "== Removing Chrome / Google files ==" -ForegroundColor Cyan
-$filePaths = @(
-    "$env:ProgramFiles\Google\Chrome",
-    "${env:ProgramFiles(x86)}\Google\Chrome",
-    "$env:ProgramFiles\Google\Update",
-    "${env:ProgramFiles(x86)}\Google\Update",
-    "$env:ProgramData\Google",
-    "$env:LocalAppData\Google\Chrome",
-    "$env:LocalAppData\Google\Update",
-    "$env:AppData\Google\Chrome"
-)
-
-foreach ($fp in $filePaths) {
-    if (Test-Path $fp) {
-        Write-Host "Removing $fp" -ForegroundColor Yellow
-        cmd /c "rmdir /s /q `"$fp`"" | Out-Null
-    }
-}
-
-Write-Host "== Removing Start Menu shortcuts ==" -ForegroundColor Cyan
-$shortcutPaths = @(
-    "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Google Chrome.lnk",
-    "$env:AppData\Microsoft\Windows\Start Menu\Programs\Google Chrome.lnk",
-    "$env:Public\Desktop\Google Chrome.lnk",
-    "$env:UserProfile\Desktop\Google Chrome.lnk"
-)
-foreach ($sp in $shortcutPaths) {
-    if (Test-Path $sp) {
-        Remove-Item $sp -Force
-    }
-}
-
-Write-Host "== Optional: removing Google Update services from SCM if present ==" -ForegroundColor Cyan
-sc.exe delete gupdate | Out-Null
-sc.exe delete gupdatem | Out-Null
-
-Write-Host ""
-Write-Host "Chrome nuke pass complete." -ForegroundColor Green
-Write-Host "REBOOT before reinstalling an older version." -ForegroundColor Green
-```
+File extension: ps1
 
 
-----------------------------------------------------------
+Failure handling
 
-# same helper functions as Chrome version above
-```
-$path = Resolve-BrowserPath -ExeName 'msedge.exe' -DisplayRegex '^(Microsoft Edge)(\s|$)' -CommonPaths @(
-    "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
-    "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
-    "$env:LocalAppData\Microsoft\Edge\Application\msedge.exe"
-)
+Continue on failure
 
-if (-not $path) { Write-Output 'NONE'; exit 0 }
 
-Write-Output (Get-PeArchitecture -Path $path)
+
+---
+
+Task 14
+
+Type: Files
+Name: Check ccmrepair exists
+Purpose: confirm repair executable exists before launching it
+
+Settings
+
+Path / file to query:
+
+
+%SystemRoot%\CCM\ccmrepair.exe
+
+Failure handling
+
+Continue on failure
+
+
+
+---
+
+Task 15
+
+Type: Execute Program / File task
+Name: Run ccmrepair
+Purpose: trigger MECM client repair after WMI repair
+
+Program / file
+
+%SystemRoot%\CCM\ccmrepair.exe
+
+Arguments
+
+none
+
+
+Success codes
+
+0
+
+
+Failure handling
+
+Continue on failure
+I would continue so you can still inspect services / logs afterward.
+
+
+
+---
+
+Task 16
+
+Type: Query Service Properties
+Name: Verify CcmExec after repair
+Purpose: quick confirmation MECM service is back
+
+Settings
+
+Filter by service name:
+
+
+CcmExec
+
+Failure handling
+
+Continue on failure
+
+
+
+---
+
+Recommended task order summary
+
+1. Query Winmgmt
+
+
+2. Query CcmExec
+
+
+3. Check CcmExec.exe
+
+
+4. Check WMI repository folder
+
+
+5. Verify WMI before repair
+
+
+6. Stop CcmExec
+
+
+7. Stop IP Helper
+
+
+8. Stop Winmgmt
+
+
+9. Salvage WMI repository
+
+
+10. Recompile WMI MOFs
+
+
+11. Start Winmgmt
+
+
+12. Start CcmExec
+
+
+13. Verify WMI after repair
+
+
+14. Check ccmrepair.exe
+
+
+15. Run ccmrepair.exe
+
+
+16. Verify CcmExec after repair
+
+
+
+
+---
+
+Optional tiny improvements
+
+Add a wait after starting Winmgmt
+
+If you want one extra stability step, insert a PowerShell task between Task 11 and Task 12:
+
+Name: Wait for WMI service settle
+
+Start-Sleep -Seconds 10
 exit 0
-```
----------------------------------------------------------
 
-```
-function Get-PeArchitecture {
-    param([Parameter(Mandatory)][string]$Path)
-    $fs = [System.IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
-    try {
-        $br = New-Object System.IO.BinaryReader($fs)
-        $fs.Seek(0x3C, [System.IO.SeekOrigin]::Begin) | Out-Null
-        $peOffset = $br.ReadInt32()
-        $fs.Seek($peOffset + 4, [System.IO.SeekOrigin]::Begin) | Out-Null
-        $machine = $br.ReadUInt16()
-        switch ($machine) {
-            0x014c { '32' }
-            0x8664 { '64' }
-            default { 'NONE' }
-        }
-    } finally { $fs.Dispose() }
-}
+That is not required, but it can make the restart sequence a little less twitchy.
 
-function Get-DisplayIconPath {
-    param([string]$DisplayIcon)
-    if ([string]::IsNullOrWhiteSpace($DisplayIcon)) { return $null }
-    $icon = $DisplayIcon.Trim()
-    if ($icon -match '^\s*"([^"]+)"') { return $matches[1] }
-    return ($icon -split ',')[0].Trim()
-}
+Add a wait after ccmrepair
 
-function Resolve-BrowserPath {
-    $candidates = New-Object System.Collections.Generic.List[string]
+If you want a cleaner post-check, insert another tiny PowerShell task after Task 15:
 
-    foreach ($key in @(
-        "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe",
-        "Registry::HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\firefox.exe"
-    )) {
-        try {
-            $item = Get-ItemProperty -Path $key -ErrorAction Stop
-            $path = $item.'(default)'
-            if (-not $path) { $path = $item.Path }
-            if ($path -and (Test-Path -LiteralPath $path)) { $candidates.Add($path) }
-        } catch {}
-    }
-
-    foreach ($root in @(
-        'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-        'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
-        'Registry::HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-        'Registry::HKEY_CURRENT_USER\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
-    )) {
-        try {
-            Get-ItemProperty -Path $root -ErrorAction SilentlyContinue | ForEach-Object {
-                if ($_.DisplayName -and ($_.DisplayName -match '^(Mozilla Firefox|Firefox)( ESR)?(\s|$)')) {
-                    $path = $null
-                    if ($_.InstallLocation) {
-                        $tryExe = Join-Path $_.InstallLocation 'firefox.exe'
-                        if (Test-Path -LiteralPath $tryExe) { $path = $tryExe }
-                    }
-                    if (-not $path -and $_.DisplayIcon) {
-                        $iconPath = Get-DisplayIconPath -DisplayIcon $_.DisplayIcon
-                        if ($iconPath -and (Test-Path -LiteralPath $iconPath)) { $path = $iconPath }
-                    }
-                    if ($path) { $candidates.Add($path) }
-                }
-            }
-        } catch {}
-    }
-
-    foreach ($path in @(
-        "$env:ProgramFiles\Mozilla Firefox\firefox.exe",
-        "${env:ProgramFiles(x86)}\Mozilla Firefox\firefox.exe",
-        "$env:LocalAppData\Mozilla Firefox\firefox.exe"
-    )) {
-        if ($path -and (Test-Path -LiteralPath $path)) { $candidates.Add($path) }
-    }
-
-    $seen = @{}
-    foreach ($p in $candidates) {
-        if (-not $seen.ContainsKey($p)) {
-            $seen[$p] = $true
-            return $p
-        }
-    }
-    return $null
-}
-
-$path = Resolve-BrowserPath
-if (-not $path) { Write-Output 'NONE'; exit 0 }
-
-Write-Output (Get-PeArchitecture -Path $path)
+Start-Sleep -Seconds 20
 exit 0
-```
 
 
+---
 
+What not to put in this SAFE module
+
+Do not add:
+
+winmgmt /resetrepository
+
+deleting %SystemRoot%\System32\wbem\Repository
+
+blanket regsvr32 loops across every DLL in the folder
+
+
+Those belong in a separate last resort module, not the safe one. Your playbook only escalates to reset when salvage still fails, and explicitly warns that full reset means the MECM client may need reinstall.
+
+
+---
+
+For your browser module follow-up PowerShell task
+
+You were right — a single PowerShell action at the end is fine. Ivanti does not need anything exotic there beyond:
+
+file extension ps1
+
+success exit 0
+
+nonzero on failure if you want the task to show failed
+
+
+The main thing is to make sure your script ends with:
+
+exit 0
+
+on success, and exit 1 in the catch block if you want Ivanti to mark it failed.
+
+If you want, I can do the same style of literal Ivanti build sheet for the MECM action-cycle follow-up task too.
