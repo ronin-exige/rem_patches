@@ -1,3 +1,884 @@
+
+Yes — that pattern is a good fit for Ivanti.
+
+For the parameter-setting PowerShell tasks, I would switch the gate parameters to Text and store literal Yes / No, since your console is only letting you use Set parameter with standard output with text parameters. Ivanti’s PowerShell Execute task does support putting standard output into a parameter, and Ivanti parameter references like $[ParamName] are parsed when the task executes, so this approach is valid. 
+
+For the setter tasks, use this rule every time:
+
+initialize a variable like $result = 'No'
+
+only change it to Yes if the test passes
+
+output only that one value with Write-Output $result
+
+exit 0
+
+
+That is safer in Ivanti than mixing logs into the same task that sets a parameter.
+
+Use these module parameters as Text
+
+ForceRepair = No
+
+CCMInstalled = No
+
+WMIFix = No
+
+RunCCMRepair = No
+
+RunMECMActions = No
+
+RunGPUpdate = No
+
+WinmgmtStopMethod = NotRun
+
+
+Then your conditions still just compare text:
+
+WMIFix = Yes
+
+RunCCMRepair = Yes
+
+RunMECMActions = Yes
+
+RunGPUpdate = Yes
+
+
+
+---
+
+Rewritten scripts
+
+Below I’m keeping the same task numbers from the corrected build sheet.
+
+Task 4 — Check WMI repository folder
+
+Not a parameter-setter.
+
+$path = Join-Path $env:SystemRoot 'System32\wbem\Repository'
+
+if (Test-Path -Path $path -PathType Container) {
+    Write-Host "WMI repository folder exists: $path"
+    exit 0
+}
+else {
+    Write-Host "WMI repository folder missing: $path"
+    exit 1
+}
+
+
+---
+
+Task 5 — Set CCMInstalled parameter
+
+Set parameter with standard output: CCMInstalled
+
+$result = 'No'
+
+$ccmExe = Join-Path $env:SystemRoot 'CCM\CcmExec.exe'
+$exeExists = Test-Path -Path $ccmExe -PathType Leaf
+
+$svcExists = $false
+try {
+    Get-Service -Name 'CcmExec' -ErrorAction Stop | Out-Null
+    $svcExists = $true
+}
+catch {
+}
+
+if ($exeExists -or $svcExists) {
+    $result = 'Yes'
+}
+
+Write-Output $result
+exit 0
+
+
+---
+
+Task 6 — Verbose pre-check WMI + ConfigMgr
+
+Not a parameter-setter.
+
+$failures = @()
+$ccmInstalled = '$[CCMInstalled]'
+$repoPath = Join-Path $env:SystemRoot 'System32\wbem\Repository'
+
+if (Test-Path -Path $repoPath -PathType Container) {
+    Write-Host "PASS: WMI repository folder exists: $repoPath"
+}
+else {
+    $failures += "WMI repository folder missing: $repoPath"
+}
+
+try {
+    Get-CimInstance Win32_OperatingSystem -ErrorAction Stop | Out-Null
+    Write-Host "PASS: Basic WMI query (Win32_OperatingSystem)"
+}
+catch {
+    $failures += "Basic WMI query failed: $($_.Exception.Message)"
+}
+
+try {
+    $verify = ((cmd /c "winmgmt /verifyrepository") 2>&1 | Out-String).Trim()
+    Write-Host "Repository verify result: $verify"
+    if ($verify -notmatch 'consistent|is consistent') {
+        $failures += "Repository verify did not report consistent"
+    }
+}
+catch {
+    $failures += "Repository verify failed: $($_.Exception.Message)"
+}
+
+if ($ccmInstalled -eq 'Yes') {
+    try {
+        Get-CimInstance -Namespace 'root\ccm' -ClassName 'SMS_Client' -ErrorAction Stop | Out-Null
+        Write-Host "PASS: root\ccm : SMS_Client"
+    }
+    catch {
+        $failures += "root\ccm SMS_Client failed: $($_.Exception.Message)"
+    }
+
+    try {
+        Get-CimClass -Namespace 'root\ccm\ClientSDK' -ClassName 'CCM_SoftwareCatalogUtilities' -ErrorAction Stop | Out-Null
+        Write-Host "PASS: root\ccm\ClientSDK : CCM_SoftwareCatalogUtilities"
+    }
+    catch {
+        $failures += "root\ccm\ClientSDK CCM_SoftwareCatalogUtilities failed: $($_.Exception.Message)"
+    }
+
+    try {
+        $svc = Get-Service -Name 'CcmExec' -ErrorAction Stop
+        Write-Host "PASS: CcmExec service found. Status: $($svc.Status)"
+    }
+    catch {
+        $failures += "CcmExec service query failed: $($_.Exception.Message)"
+    }
+}
+else {
+    Write-Host "SKIP: MECM client not installed — skipping root\ccm and ClientSDK checks"
+}
+
+if ($failures.Count -eq 0) {
+    Write-Host "OVERALL: HEALTHY"
+    exit 0
+}
+else {
+    Write-Host "OVERALL: BROKEN"
+    $failures | ForEach-Object { Write-Host $_ }
+    exit 1
+}
+
+
+---
+
+Task 7 — Set WMIFix parameter
+
+Set parameter with standard output: WMIFix
+
+$result = 'No'
+
+if ('$[ForceRepair]' -eq 'Yes') {
+    $result = 'Yes'
+    Write-Output $result
+    exit 0
+}
+
+$ccmInstalled = '$[CCMInstalled]'
+$repoPath = Join-Path $env:SystemRoot 'System32\wbem\Repository'
+
+if (-not (Test-Path -Path $repoPath -PathType Container)) {
+    $result = 'Yes'
+}
+
+try {
+    Get-CimInstance Win32_OperatingSystem -ErrorAction Stop | Out-Null
+}
+catch {
+    $result = 'Yes'
+}
+
+try {
+    $verify = ((cmd /c "winmgmt /verifyrepository") 2>&1 | Out-String).Trim()
+    if ($verify -notmatch 'consistent|is consistent') {
+        $result = 'Yes'
+    }
+}
+catch {
+    $result = 'Yes'
+}
+
+if ($ccmInstalled -eq 'Yes') {
+    try {
+        Get-CimInstance -Namespace 'root\ccm' -ClassName 'SMS_Client' -ErrorAction Stop | Out-Null
+    }
+    catch {
+        $result = 'Yes'
+    }
+
+    try {
+        Get-CimClass -Namespace 'root\ccm\ClientSDK' -ClassName 'CCM_SoftwareCatalogUtilities' -ErrorAction Stop | Out-Null
+    }
+    catch {
+        $result = 'Yes'
+    }
+}
+
+Write-Output $result
+exit 0
+
+
+---
+
+Task 11 — Stop Winmgmt with PID fallback
+
+Not a standard-output setter. I rewrote this one to avoid relying on CIM after WMI is being stopped.
+
+$stopMethod = 'NotRun'
+
+try {
+    $svc = Get-Service -Name 'Winmgmt' -ErrorAction Stop
+}
+catch {
+    $stopMethod = 'ServiceNotFound'
+    $global:WinmgmtStopMethod = $stopMethod
+    Write-Host "Winmgmt service not found: $($_.Exception.Message)"
+    exit 1
+}
+
+if ($svc.Status -eq 'Stopped') {
+    $stopMethod = 'AlreadyStopped'
+    $global:WinmgmtStopMethod = $stopMethod
+    Write-Host "Winmgmt already stopped"
+    exit 0
+}
+
+try {
+    Stop-Service -Name 'Winmgmt' -Force -ErrorAction Stop
+    Write-Host "Stop-Service issued for Winmgmt"
+}
+catch {
+    Write-Host "Stop-Service failed for Winmgmt: $($_.Exception.Message)"
+}
+
+Start-Sleep -Seconds 10
+$svc.Refresh()
+
+if ($svc.Status -eq 'Stopped') {
+    $stopMethod = 'Graceful'
+    $global:WinmgmtStopMethod = $stopMethod
+    Write-Host "Winmgmt stopped cleanly"
+    exit 0
+}
+
+$scOutput = sc.exe queryex Winmgmt
+$pid = 0
+
+foreach ($line in $scOutput) {
+    if ($line -match 'PID\s*:\s*(\d+)') {
+        $pid = [int]$matches[1]
+        break
+    }
+}
+
+Write-Host "Winmgmt still running. PID: $pid"
+
+if ($pid -le 0) {
+    $stopMethod = 'NoPID'
+    $global:WinmgmtStopMethod = $stopMethod
+    Write-Host "No valid PID found for Winmgmt"
+    exit 1
+}
+
+$tasklistOutput = tasklist /svc /fi "PID eq $pid"
+$serviceLine = $tasklistOutput | Where-Object { $_ -match "^\s*\S+\s+$pid\s+" }
+
+if ($serviceLine) {
+    Write-Host "tasklist /svc result: $serviceLine"
+    if ($serviceLine -match ',') {
+        $stopMethod = 'SharedProcessRefused'
+        $global:WinmgmtStopMethod = $stopMethod
+        Write-Host "Refusing to kill PID $pid because multiple services appear tied to it"
+        exit 1
+    }
+}
+
+try {
+    Stop-Process -Id $pid -Force -ErrorAction Stop
+    Write-Host "Force-killed PID $pid for Winmgmt"
+}
+catch {
+    $stopMethod = 'PIDKillFailed'
+    $global:WinmgmtStopMethod = $stopMethod
+    Write-Host "Force-kill failed: $($_.Exception.Message)"
+    exit 1
+}
+
+Start-Sleep -Seconds 5
+
+try {
+    $svc = Get-Service -Name 'Winmgmt' -ErrorAction Stop
+    if ($svc.Status -eq 'Stopped') {
+        $stopMethod = 'PIDKill'
+        $global:WinmgmtStopMethod = $stopMethod
+        Write-Host "Winmgmt is stopped after PID kill"
+        exit 0
+    }
+    else {
+        $stopMethod = 'StillRunning'
+        $global:WinmgmtStopMethod = $stopMethod
+        Write-Host "Winmgmt still not stopped after PID kill"
+        exit 1
+    }
+}
+catch {
+    $stopMethod = 'PIDKill'
+    $global:WinmgmtStopMethod = $stopMethod
+    Write-Host "Winmgmt no longer queryable after PID kill; treating as stopped"
+    exit 0
+}
+
+
+---
+
+Task 12 — Salvage WMI repository
+
+Not a parameter-setter.
+
+$verifyBefore = ((cmd /c "winmgmt /verifyrepository") 2>&1 | Out-String).Trim()
+Write-Host "Verify before salvage: $verifyBefore"
+
+cmd /c "winmgmt /salvagerepository" | Out-Null
+Start-Sleep -Seconds 10
+
+$verifyAfter = ((cmd /c "winmgmt /verifyrepository") 2>&1 | Out-String).Trim()
+Write-Host "Verify after salvage: $verifyAfter"
+
+if ($verifyAfter -match 'consistent|is consistent') {
+    exit 0
+}
+else {
+    exit 1
+}
+
+
+---
+
+Task 13 — Recompile WMI MOFs
+
+Not a parameter-setter.
+
+$mofDir = Join-Path $env:SystemRoot 'System32\wbem'
+$files  = Get-ChildItem -Path $mofDir -File | Where-Object {
+    $_.Extension -in '.mof', '.mfl' -and $_.Name -notmatch 'uninstall'
+}
+
+if (-not $files) {
+    Write-Host "No MOF/MFL files found in $mofDir"
+    exit 1
+}
+
+$failCount = 0
+
+foreach ($file in $files) {
+    Write-Host "Compiling: $($file.FullName)"
+    $output = & mofcomp.exe $file.FullName 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "FAILED: $($file.Name)"
+        $output | ForEach-Object { Write-Host $_ }
+        $failCount++
+    }
+    else {
+        Write-Host "OK: $($file.Name)"
+    }
+}
+
+Write-Host "MOF recompilation complete. Failures: $failCount"
+
+if ($failCount -gt 0) {
+    exit 1
+}
+else {
+    exit 0
+}
+
+
+---
+
+Task 15 — Wait for WMI settle
+
+Not a parameter-setter.
+
+Start-Sleep -Seconds 10
+exit 0
+
+
+---
+
+Task 18 — Verbose post-check WMI + ConfigMgr
+
+Not a parameter-setter.
+
+$failures = @()
+$ccmInstalled = '$[CCMInstalled]'
+$repoPath = Join-Path $env:SystemRoot 'System32\wbem\Repository'
+
+if (Test-Path -Path $repoPath -PathType Container) {
+    Write-Host "PASS: WMI repository folder exists: $repoPath"
+}
+else {
+    $failures += "WMI repository folder missing: $repoPath"
+}
+
+try {
+    Get-CimInstance Win32_OperatingSystem -ErrorAction Stop | Out-Null
+    Write-Host "PASS: Basic WMI query (Win32_OperatingSystem)"
+}
+catch {
+    $failures += "Basic WMI query failed: $($_.Exception.Message)"
+}
+
+try {
+    $verify = ((cmd /c "winmgmt /verifyrepository") 2>&1 | Out-String).Trim()
+    Write-Host "Repository verify result: $verify"
+    if ($verify -notmatch 'consistent|is consistent') {
+        $failures += "Repository verify did not report consistent"
+    }
+}
+catch {
+    $failures += "Repository verify failed: $($_.Exception.Message)"
+}
+
+if ($ccmInstalled -eq 'Yes') {
+    try {
+        Get-CimInstance -Namespace 'root\ccm' -ClassName 'SMS_Client' -ErrorAction Stop | Out-Null
+        Write-Host "PASS: root\ccm : SMS_Client"
+    }
+    catch {
+        $failures += "root\ccm SMS_Client failed: $($_.Exception.Message)"
+    }
+
+    try {
+        Get-CimClass -Namespace 'root\ccm\ClientSDK' -ClassName 'CCM_SoftwareCatalogUtilities' -ErrorAction Stop | Out-Null
+        Write-Host "PASS: root\ccm\ClientSDK : CCM_SoftwareCatalogUtilities"
+    }
+    catch {
+        $failures += "root\ccm\ClientSDK CCM_SoftwareCatalogUtilities failed: $($_.Exception.Message)"
+    }
+
+    try {
+        $svc = Get-Service -Name 'CcmExec' -ErrorAction Stop
+        Write-Host "CcmExec status: $($svc.Status)"
+        if ($svc.Status -ne 'Running') {
+            $failures += "CcmExec is not running"
+        }
+    }
+    catch {
+        $failures += "CcmExec service query failed: $($_.Exception.Message)"
+    }
+}
+else {
+    Write-Host "SKIP: MECM client not installed — skipping root\ccm and ClientSDK checks"
+}
+
+if ($failures.Count -eq 0) {
+    Write-Host "OVERALL: HEALTHY"
+    exit 0
+}
+else {
+    Write-Host "OVERALL: BROKEN"
+    $failures | ForEach-Object { Write-Host $_ }
+    exit 1
+}
+
+
+---
+
+Task 19 — Set RunCCMRepair parameter
+
+Set parameter with standard output: RunCCMRepair
+
+$result = 'No'
+
+if ('$[WMIFix]' -ne 'Yes') {
+    Write-Output $result
+    exit 0
+}
+
+if ('$[CCMInstalled]' -ne 'Yes') {
+    Write-Output $result
+    exit 0
+}
+
+$ccmRepair = Join-Path $env:SystemRoot 'CCM\ccmrepair.exe'
+
+if (-not (Test-Path -Path $ccmRepair -PathType Leaf)) {
+    Write-Output $result
+    exit 0
+}
+
+$wmiOk = $true
+
+try {
+    Get-CimInstance Win32_OperatingSystem -ErrorAction Stop | Out-Null
+}
+catch {
+    $wmiOk = $false
+}
+
+try {
+    $verify = ((cmd /c "winmgmt /verifyrepository") 2>&1 | Out-String).Trim()
+    if ($verify -notmatch 'consistent|is consistent') {
+        $wmiOk = $false
+    }
+}
+catch {
+    $wmiOk = $false
+}
+
+if ($wmiOk) {
+    $result = 'Yes'
+}
+
+Write-Output $result
+exit 0
+
+
+---
+
+Task 20 — Set RunMECMActions parameter
+
+Set parameter with standard output: RunMECMActions
+
+$result = 'No'
+
+if ('$[WMIFix]' -ne 'Yes') {
+    Write-Output $result
+    exit 0
+}
+
+if ('$[CCMInstalled]' -ne 'Yes') {
+    Write-Output $result
+    exit 0
+}
+
+$ok = $true
+
+try {
+    Get-CimInstance Win32_OperatingSystem -ErrorAction Stop | Out-Null
+}
+catch {
+    $ok = $false
+}
+
+try {
+    $verify = ((cmd /c "winmgmt /verifyrepository") 2>&1 | Out-String).Trim()
+    if ($verify -notmatch 'consistent|is consistent') {
+        $ok = $false
+    }
+}
+catch {
+    $ok = $false
+}
+
+try {
+    Get-CimInstance -Namespace 'root\ccm' -ClassName 'SMS_Client' -ErrorAction Stop | Out-Null
+}
+catch {
+    $ok = $false
+}
+
+try {
+    $svc = Get-Service -Name 'CcmExec' -ErrorAction Stop
+    if ($svc.Status -ne 'Running') {
+        $ok = $false
+    }
+}
+catch {
+    $ok = $false
+}
+
+if ($ok) {
+    $result = 'Yes'
+}
+
+Write-Output $result
+exit 0
+
+
+---
+
+Task 21 — Set RunGPUpdate parameter
+
+Set parameter with standard output: RunGPUpdate
+
+$result = 'No'
+
+if ('$[WMIFix]' -ne 'Yes') {
+    Write-Output $result
+    exit 0
+}
+
+$ok = $true
+
+try {
+    Get-CimInstance Win32_OperatingSystem -ErrorAction Stop | Out-Null
+}
+catch {
+    $ok = $false
+}
+
+try {
+    $verify = ((cmd /c "winmgmt /verifyrepository") 2>&1 | Out-String).Trim()
+    if ($verify -notmatch 'consistent|is consistent') {
+        $ok = $false
+    }
+}
+catch {
+    $ok = $false
+}
+
+if ($ok) {
+    $result = 'Yes'
+}
+
+Write-Output $result
+exit 0
+
+
+---
+
+Task 22 — Run ccmrepair via PowerShell
+
+Not a parameter-setter.
+
+$exe = Join-Path $env:SystemRoot 'CCM\ccmrepair.exe'
+
+if (-not (Test-Path -Path $exe -PathType Leaf)) {
+    Write-Host "ccmrepair.exe not found at $exe"
+    exit 1
+}
+
+try {
+    $proc = Start-Process -FilePath $exe -Wait -PassThru -NoNewWindow -ErrorAction Stop
+    Write-Host "ccmrepair.exe exited with code: $($proc.ExitCode)"
+    exit $proc.ExitCode
+}
+catch {
+    Write-Host "Failed to launch ccmrepair.exe: $($_.Exception.Message)"
+    exit 1
+}
+
+
+---
+
+Task 23 — Wait after ccmrepair
+
+Not a parameter-setter.
+
+Start-Sleep -Seconds 20
+exit 0
+
+
+---
+
+Task 24 — Run MECM client recovery actions
+
+Not a parameter-setter.
+
+$actions = @(
+    @{ Name = 'Machine Policy Assignments Request';      Id = '{00000000-0000-0000-0000-000000000021}' },
+    @{ Name = 'Machine Policy Evaluation';               Id = '{00000000-0000-0000-0000-000000000022}' },
+    @{ Name = 'LS Refresh Locations Task';               Id = '{00000000-0000-0000-0000-000000000024}' },
+    @{ Name = 'User Policy Assignments Request';         Id = '{00000000-0000-0000-0000-000000000026}' },
+    @{ Name = 'User Policy Evaluation';                  Id = '{00000000-0000-0000-0000-000000000027}' },
+    @{ Name = 'Hardware Inventory Collection Cycle';     Id = '{00000000-0000-0000-0000-000000000101}' },
+    @{ Name = 'Software Inventory Collection Cycle';     Id = '{00000000-0000-0000-0000-000000000102}' },
+    @{ Name = 'Discovery Data Collection Cycle';         Id = '{00000000-0000-0000-0000-000000000103}' },
+    @{ Name = 'Software Updates Assignments Evaluation'; Id = '{00000000-0000-0000-0000-000000000108}' },
+    @{ Name = 'Scan by Update Source';                   Id = '{00000000-0000-0000-0000-000000000113}' },
+    @{ Name = 'Update Store Policy';                     Id = '{00000000-0000-0000-0000-000000000114}' },
+    @{ Name = 'Application Manager Policy Action';       Id = '{00000000-0000-0000-0000-000000000121}' },
+    @{ Name = 'Application Manager User Policy Action';  Id = '{00000000-0000-0000-0000-000000000122}' },
+    @{ Name = 'Application Manager Global Evaluation';   Id = '{00000000-0000-0000-0000-000000000123}' }
+)
+
+$failed = $false
+
+foreach ($action in $actions) {
+    try {
+        $result = Invoke-CimMethod -Namespace 'root\ccm' `
+                                   -ClassName 'SMS_Client' `
+                                   -MethodName 'TriggerSchedule' `
+                                   -Arguments @{ sScheduleID = $action.Id } `
+                                   -ErrorAction Stop
+
+        Write-Host "OK: $($action.Name) [$($action.Id)] ReturnValue=$($result.ReturnValue)"
+
+        if ($result.ReturnValue -ne 0) {
+            $failed = $true
+        }
+    }
+    catch {
+        Write-Host "FAIL: $($action.Name) [$($action.Id)] $($_.Exception.Message)"
+        $failed = $true
+    }
+
+    Start-Sleep -Seconds 2
+}
+
+if ($failed) {
+    exit 1
+}
+else {
+    exit 0
+}
+
+
+---
+
+Task 25 — Run gpupdate /force
+
+Not a parameter-setter.
+
+$exe = Join-Path $env:SystemRoot 'System32\gpupdate.exe'
+
+try {
+    $proc = Start-Process -FilePath $exe -ArgumentList '/force' -Wait -PassThru -NoNewWindow -ErrorAction Stop
+    Write-Host "gpupdate.exe exited with code: $($proc.ExitCode)"
+    exit $proc.ExitCode
+}
+catch {
+    Write-Host "Failed to run gpupdate /force: $($_.Exception.Message)"
+    exit 1
+}
+
+
+---
+
+Task 26 — Final validation summary
+
+Not a parameter-setter.
+
+$failures = @()
+$ccmInstalled = '$[CCMInstalled]'
+
+try {
+    Get-CimInstance Win32_OperatingSystem -ErrorAction Stop | Out-Null
+    Write-Host "PASS: Basic WMI query"
+}
+catch {
+    $failures += "Basic WMI query failed: $($_.Exception.Message)"
+}
+
+try {
+    $verify = ((cmd /c "winmgmt /verifyrepository") 2>&1 | Out-String).Trim()
+    Write-Host "Repository verify result: $verify"
+    if ($verify -notmatch 'consistent|is consistent') {
+        $failures += "Repository verify did not report consistent"
+    }
+}
+catch {
+    $failures += "Repository verify failed: $($_.Exception.Message)"
+}
+
+if ($ccmInstalled -eq 'Yes') {
+    try {
+        Get-CimInstance -Namespace 'root\ccm' -ClassName 'SMS_Client' -ErrorAction Stop | Out-Null
+        Write-Host "PASS: root\ccm : SMS_Client"
+    }
+    catch {
+        $failures += "root\ccm SMS_Client failed: $($_.Exception.Message)"
+    }
+
+    try {
+        Get-CimClass -Namespace 'root\ccm\ClientSDK' -ClassName 'CCM_SoftwareCatalogUtilities' -ErrorAction Stop | Out-Null
+        Write-Host "PASS: root\ccm\ClientSDK : CCM_SoftwareCatalogUtilities"
+    }
+    catch {
+        $failures += "root\ccm\ClientSDK CCM_SoftwareCatalogUtilities failed: $($_.Exception.Message)"
+    }
+
+    try {
+        $svc = Get-Service -Name 'CcmExec' -ErrorAction Stop
+        Write-Host "CcmExec status: $($svc.Status)"
+        if ($svc.Status -ne 'Running') {
+            $failures += "CcmExec is not running"
+        }
+    }
+    catch {
+        $failures += "CcmExec service query failed: $($_.Exception.Message)"
+    }
+}
+else {
+    Write-Host "SKIP: MECM client not installed — CCM health checks skipped"
+}
+
+Write-Host "--- Parameter Summary ---"
+Write-Host "CCMInstalled=$[CCMInstalled]"
+Write-Host "WMIFix=$[WMIFix]"
+Write-Host "WinmgmtStopMethod=$[WinmgmtStopMethod]"
+Write-Host "RunCCMRepair=$[RunCCMRepair]"
+Write-Host "RunMECMActions=$[RunMECMActions]"
+Write-Host "RunGPUpdate=$[RunGPUpdate]"
+
+if ($failures.Count -eq 0) {
+    Write-Host "FINAL RESULT: PASS"
+    exit 0
+}
+else {
+    Write-Host "FINAL RESULT: FAIL"
+    $failures | ForEach-Object { Write-Host $_ }
+    exit 1
+}
+
+
+---
+
+Very important Ivanti setup note
+
+For these tasks:
+
+Task 5
+
+Task 7
+
+Task 19
+
+Task 20
+
+Task 21
+
+
+do all of this:
+
+parameter type = Text
+
+enable Set parameter with standard output
+
+script outputs only Yes or No
+
+leave success as exit 0
+
+
+That matches the safest pattern for your UI and the PowerShell Execute task’s stdout-to-parameter behavior. 
+
+The one script I intentionally did not convert to stdout-to-parameter is Task 11, because it needs to log details and can exit from multiple branches. I left that as the one informational $global: parameter script.
+
+If you want, next I’ll give you the same thing in a copy/paste operator sheet with:
+
+task number
+
+task type
+
+condition
+
+whether “Set parameter with standard output” should be checked
+
+exact parameter name to pick in the UI
+
+‐------------------------------------------——------------------
+----------——---------------------------
 Use this version. It keeps the gate parameters on the simple, visible “Set parameter with standard output” path, uses task Conditions for branching, keeps only one informational $global: parameter, and leaves the final Parameters (Query) task reachable even when validation fails. Ivanti documents all three pieces: parameter capture from standard output, multiple returns with $global:param=..., and parameter-driven task conditions; the Parameters (Query) task is specifically meant to show module parameter values in runs where conditions/evaluators set them. 
 
 I also loosened the RunCCMRepair gate so ccmrepair.exe can still run on machines where generic WMI is back but the CCM side is still damaged. For the MECM action task, I kept the stricter gate because those actions rely on SMS_Client.TriggerSchedule, which Microsoft documents on the client WMI class. 
