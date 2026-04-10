@@ -1,139 +1,67 @@
 Yep — here’s the full corrected build sheet in one place, using your preferred “parameter defaults to No, flip to Yes, then Write-Output $ParameterName” style for every stdout setter task.
-
 A couple of setup notes first:
-
-Set these module parameters as Text parameters, since your Ivanti console only lets you use Set parameter with standard output with text parameters. Ivanti’s PowerShell task supports setting a parameter from standard output, supports parameter substitution like $[ParamName] at execution time, supports multiple-return $global:param=... if needed, and the Parameters (Query) task is specifically useful for showing parameter values that were set during a module run. 
-
-The MECM action task below uses SMS_Client.TriggerSchedule, which Microsoft documents as the method that triggers a specified client schedule. 
-
+Set these module parameters as Text parameters, since your Ivanti console only lets you use Set parameter with standard output with text parameters. Ivanti’s PowerShell task supports setting a parameter from standard output, supports parameter substitution like $[ParamName] at execution time, supports multiple-return $global:param=... if needed, and the Parameters (Query) task is specifically useful for showing parameter values that were set during a module run. �
+Ivanti +1
+The MECM action task below uses SMS_Client.TriggerSchedule, which Microsoft documents as the method that triggers a specified client schedule. �
+Microsoft Learn +1
 Module parameters to create
-
 Create these as Text parameters:
-
 ForceRepair = No
-
 CCMInstalled = No
-
 WMIFix = No
-
 RunCCMRepair = No
-
 RunMECMActions = No
-
 RunGPUpdate = No
-
 WinmgmtStopMethod = NotRun
-
-
 Conditions to use
-
 Use these as Parameter conditions:
-
 Repair branch: WMIFix = Yes
-
 CCM repair: RunCCMRepair = Yes
-
 MECM actions: RunMECMActions = Yes
-
 GP update: RunGPUpdate = Yes
-
-
 Very important rule for setter tasks
-
 For these tasks:
-
 Task 5
-
 Task 7
-
 Task 19
-
 Task 20
-
 Task 21
-
-
 Do all of this:
-
 Enable Set parameter with standard output
-
 Pick the matching parameter
-
 Make the script output only Yes or No
-
 Keep exit 0
-
-
 Do not add Write-Host logging inside those setter tasks.
-
-
----
-
 Full build sheet
-
 Task 1
-
 Type: Query Service Properties
 Name: Query Winmgmt
 Purpose: confirm WMI service exists
-
 Settings
-
 Filter by service name: Winmgmt
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 2
-
 Type: Query Service Properties
 Name: Query CcmExec
 Purpose: confirm MECM client service exists
-
 Settings
-
 Filter by service name: CcmExec
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 3
-
 Type: Files
 Name: Check CCM executable
 Purpose: verify MECM client binaries exist
-
 Settings
-
 Path / file to query: %SystemRoot%\CCM\CcmExec.exe
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 4
-
 Type: Windows PowerShell Script
 Name: Check WMI repository folder
 Purpose: verify repository folder exists
-
+PowerShell
 $path = Join-Path $env:SystemRoot 'System32\wbem\Repository'
 
 if (Test-Path -Path $path -PathType Container) {
@@ -144,33 +72,18 @@ else {
     Write-Host "WMI repository folder missing: $path"
     exit 1
 }
-
 Ivanti settings
-
 File extension: ps1
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 5
-
 Type: Windows PowerShell Script
 Name: Set CCMInstalled parameter
 Purpose: detect whether MECM client appears installed
-
 Module Parameters tab
-
 Enable Set parameter with standard output
-
 Parameter: CCMInstalled
-
-
+PowerShell
 $CCMInstalled = 'No'
 
 $ccmExe = Join-Path $env:SystemRoot 'CCM\CcmExec.exe'
@@ -190,26 +103,15 @@ if ($exeExists -or $svcExists) {
 
 Write-Output $CCMInstalled
 exit 0
-
 Ivanti settings
-
 File extension: ps1
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 6
-
 Type: Windows PowerShell Script
 Name: Verbose pre-check WMI + ConfigMgr
 Purpose: log what is broken before setting WMIFix
-
+PowerShell
 $failures = @()
 $ccmInstalled = '$[CCMInstalled]'
 $repoPath = Join-Path $env:SystemRoot 'System32\wbem\Repository'
@@ -278,33 +180,18 @@ else {
     $failures | ForEach-Object { Write-Host $_ }
     exit 1
 }
-
 Ivanti settings
-
 File extension: ps1
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 7
-
 Type: Windows PowerShell Script
 Name: Set WMIFix parameter
 Purpose: set master repair flag
-
 Module Parameters tab
-
 Enable Set parameter with standard output
-
 Parameter: WMIFix
-
-
+PowerShell
 $WMIFix = 'No'
 
 if ('$[ForceRepair]' -eq 'Yes') {
@@ -355,99 +242,47 @@ if ($ccmInstalled -eq 'Yes') {
 
 Write-Output $WMIFix
 exit 0
-
 Ivanti settings
-
 File extension: ps1
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 8
-
 Type: Parameters (Query)
 Name: Show detection parameters
 Purpose: display parameter values after detection
-
 Settings
-
 Show all parameters in query summary: enabled
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 9
-
 Type: Service Properties
 Name: Stop CcmExec
 Purpose: stop MECM client before WMI work
-
 Settings
-
 Service name: CcmExec
-
 Action: Stop service
-
-
 Condition
-
 WMIFix = Yes
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 10
-
 Type: Service Properties
 Name: Stop IP Helper
 Purpose: stop IP Helper before WMI work
-
 Settings
-
 Service name: iphlpsvc
-
 Action: Stop service
-
-
 Condition
-
 WMIFix = Yes
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 11
-
 Type: Windows PowerShell Script
 Name: Stop Winmgmt with PID fallback
 Purpose: stop WMI cleanly, force-stop only if needed
-
-This is the one task where I kept $global:WinmgmtStopMethod, because it is informational only and Ivanti supports multiple-return PowerShell parameters that way. 
-
+This is the one task where I kept $global:WinmgmtStopMethod, because it is informational only and Ivanti supports multiple-return PowerShell parameters that way. �
+Ivanti +1
+PowerShell
 $stopMethod = 'NotRun'
 
 try {
@@ -551,31 +386,17 @@ catch {
     Write-Host "Winmgmt no longer queryable after PID kill; treating as stopped"
     exit 0
 }
-
 Ivanti settings
-
 File extension: ps1
-
-
 Condition
-
 WMIFix = Yes
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 12
-
 Type: Windows PowerShell Script
 Name: Salvage WMI repository
 Purpose: safe WMI salvage
-
+PowerShell
 $verifyBefore = ((cmd /c "winmgmt /verifyrepository") 2>&1 | Out-String).Trim()
 Write-Host "Verify before salvage: $verifyBefore"
 
@@ -591,31 +412,17 @@ if ($verifyAfter -match 'consistent|is consistent') {
 else {
     exit 1
 }
-
 Ivanti settings
-
 File extension: ps1
-
-
 Condition
-
 WMIFix = Yes
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 13
-
 Type: Windows PowerShell Script
 Name: Recompile WMI MOFs
 Purpose: rebuild MOF registrations
-
+PowerShell
 $mofDir = Join-Path $env:SystemRoot 'System32\wbem'
 $files  = Get-ChildItem -Path $mofDir -File | Where-Object {
     $_.Extension -in '.mof', '.mfl' -and $_.Name -notmatch 'uninstall'
@@ -649,136 +456,63 @@ if ($failCount -gt 0) {
 else {
     exit 0
 }
-
 Ivanti settings
-
 File extension: ps1
-
-
 Condition
-
 WMIFix = Yes
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 14
-
 Type: Service Properties
 Name: Start Winmgmt
 Purpose: bring WMI back up
-
 Settings
-
 Service name: Winmgmt
-
 Action: Start service
-
-
 Condition
-
 WMIFix = Yes
-
-
 Failure handling
-
 Stop on failure
-
-
-
----
-
 Task 15
-
 Type: Windows PowerShell Script
 Name: Wait for WMI settle
 Purpose: short settle time after restart
-
+PowerShell
 Start-Sleep -Seconds 10
 exit 0
-
 Ivanti settings
-
 File extension: ps1
-
-
 Condition
-
 WMIFix = Yes
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 16
-
 Type: Service Properties
 Name: Start IP Helper
 Purpose: restore IP Helper
-
 Settings
-
 Service name: iphlpsvc
-
 Action: Start service
-
-
 Condition
-
 WMIFix = Yes
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 17
-
 Type: Service Properties
 Name: Start CcmExec
 Purpose: bring MECM client back up
-
 Settings
-
 Service name: CcmExec
-
 Action: Start service
-
-
 Condition
-
 WMIFix = Yes
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 18
-
 Type: Windows PowerShell Script
 Name: Verbose post-check WMI + ConfigMgr
 Purpose: log health after WMI repair branch
-
+PowerShell
 $failures = @()
 $ccmInstalled = '$[CCMInstalled]'
 $repoPath = Join-Path $env:SystemRoot 'System32\wbem\Repository'
@@ -850,38 +584,20 @@ else {
     $failures | ForEach-Object { Write-Host $_ }
     exit 1
 }
-
 Ivanti settings
-
 File extension: ps1
-
-
 Condition
-
 WMIFix = Yes
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 19
-
 Type: Windows PowerShell Script
 Name: Set RunCCMRepair parameter
 Purpose: allow ccmrepair.exe when generic WMI is usable and the EXE exists
-
 Module Parameters tab
-
 Enable Set parameter with standard output
-
 Parameter: RunCCMRepair
-
-
+PowerShell
 $RunCCMRepair = 'No'
 
 if ('$[WMIFix]' -ne 'Yes') {
@@ -926,33 +642,18 @@ if ($wmiOk) {
 
 Write-Output $RunCCMRepair
 exit 0
-
 Ivanti settings
-
 File extension: ps1
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 20
-
 Type: Windows PowerShell Script
 Name: Set RunMECMActions parameter
 Purpose: allow MECM actions only when CCM WMI side is healthy enough
-
 Module Parameters tab
-
 Enable Set parameter with standard output
-
 Parameter: RunMECMActions
-
-
+PowerShell
 $RunMECMActions = 'No'
 
 if ('$[WMIFix]' -ne 'Yes') {
@@ -1007,33 +708,18 @@ if ($ok) {
 
 Write-Output $RunMECMActions
 exit 0
-
 Ivanti settings
-
 File extension: ps1
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 21
-
 Type: Windows PowerShell Script
 Name: Set RunGPUpdate parameter
 Purpose: allow GP refresh only when generic WMI is healthy enough
-
 Module Parameters tab
-
 Enable Set parameter with standard output
-
 Parameter: RunGPUpdate
-
-
+PowerShell
 $RunGPUpdate = 'No'
 
 if ('$[WMIFix]' -ne 'Yes') {
@@ -1066,26 +752,15 @@ if ($ok) {
 
 Write-Output $RunGPUpdate
 exit 0
-
 Ivanti settings
-
 File extension: ps1
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 22
-
 Type: Windows PowerShell Script
 Name: Run ccmrepair via PowerShell
 Purpose: launch ccmrepair.exe
-
+PowerShell
 $exe = Join-Path $env:SystemRoot 'CCM\ccmrepair.exe'
 
 if (-not (Test-Path -Path $exe -PathType Leaf)) {
@@ -1102,58 +777,30 @@ catch {
     Write-Host "Failed to launch ccmrepair.exe: $($_.Exception.Message)"
     exit 1
 }
-
 Ivanti settings
-
 File extension: ps1
-
-
 Condition
-
 RunCCMRepair = Yes
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 23
-
 Type: Windows PowerShell Script
 Name: Wait after ccmrepair
 Purpose: settle time after client repair
-
+PowerShell
 Start-Sleep -Seconds 20
 exit 0
-
 Ivanti settings
-
 File extension: ps1
-
-
 Condition
-
 RunCCMRepair = Yes
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 24
-
 Type: Windows PowerShell Script
 Name: Run MECM client recovery actions
 Purpose: trigger common MECM client actions
-
+PowerShell
 $actions = @(
     @{ Name = 'Machine Policy Assignments Request';      Id = '{00000000-0000-0000-0000-000000000021}' },
     @{ Name = 'Machine Policy Evaluation';               Id = '{00000000-0000-0000-0000-000000000022}' },
@@ -1201,31 +848,17 @@ if ($failed) {
 else {
     exit 0
 }
-
 Ivanti settings
-
 File extension: ps1
-
-
 Condition
-
 RunMECMActions = Yes
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 25
-
 Type: Windows PowerShell Script
 Name: Run gpupdate /force
 Purpose: refresh Group Policy after repair
-
+PowerShell
 $exe = Join-Path $env:SystemRoot 'System32\gpupdate.exe'
 
 try {
@@ -1237,31 +870,17 @@ catch {
     Write-Host "Failed to run gpupdate /force: $($_.Exception.Message)"
     exit 1
 }
-
 Ivanti settings
-
 File extension: ps1
-
-
 Condition
-
 RunGPUpdate = Yes
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 26
-
 Type: Windows PowerShell Script
 Name: Final validation summary
 Purpose: final readable result and summary
-
+PowerShell
 $failures = @()
 $ccmInstalled = '$[CCMInstalled]'
 
@@ -1333,67 +952,30 @@ else {
     $failures | ForEach-Object { Write-Host $_ }
     exit 1
 }
-
 Ivanti settings
-
 File extension: ps1
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Task 27
-
 Type: Parameters (Query)
 Name: Show final parameters
 Purpose: dump final parameter values into job results
-
 Settings
-
 Show all parameters in query summary: enabled
-
-
 Failure handling
-
 Continue on failure
-
-
-
----
-
 Recommended timeouts
-
 Detection tasks: 5 minutes
-
 MOF recompilation: 15 minutes
-
 ccmrepair: 20–30 minutes
-
 MECM actions: 10–15 minutes
-
 gpupdate: 10 minutes
-
-
 Grabbed logs I’d add on the key PowerShell tasks
-
 On Tasks 18, 22, 24, and 26, grab these if available:
-
 C:\Windows\CCM\Logs\CCMRepair.log
-
 C:\Windows\CCM\Logs\ClientIDManagerStartup.log
-
 C:\Windows\CCM\Logs\LocationServices.log
-
 C:\Windows\CCM\Logs\PolicyAgent.log
-
 C:\Windows\CCM\Logs\AppDiscovery.log
-
 C:\Windows\CCM\Logs\AppIntentEval.log
-
-
 If you want, next I’ll turn this into a very short console-click checklist with only: “task number / task type / condition / set-parameter yes-no / parameter name” so you can build it faster without rereading all the scripts.
