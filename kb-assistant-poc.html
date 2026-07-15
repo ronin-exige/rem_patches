@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Governed KB Assistant - Local POC</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232d; --line:#2a323d;
+    --text:#e6edf3; --muted:#8b98a5; --accent:#4a9eff; --accent2:#3fb950;
+    --warn:#d29922; --bad:#f85149; --chip:#21262d;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg);color:var(--text);font-size:14px;line-height:1.5}
+  .app{display:grid;grid-template-columns:340px 1fr;height:100vh}
+  .side{background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;padding:16px}
+  .main{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+  h1{font-size:15px;margin:0 0 2px;letter-spacing:.2px}
+  .sub{color:var(--muted);font-size:12px;margin-bottom:16px}
+  h2{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);
+    margin:20px 0 8px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
+  select,input,textarea,button{font-family:inherit;font-size:13px;background:var(--panel2);
+    color:var(--text);border:1px solid var(--line);border-radius:6px;padding:8px 10px;width:100%}
+  textarea{resize:vertical;min-height:60px}
+  button{cursor:pointer;background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  button.ghost{background:var(--panel2);color:var(--text);border-color:var(--line);font-weight:500}
+  button:hover{filter:brightness(1.08)}
+  .row{display:flex;gap:8px}
+  .row>*{flex:1}
+  .status{font-size:11px;padding:6px 8px;border-radius:6px;margin-top:8px;text-align:center}
+  .status.ok{background:rgba(63,185,80,.12);color:var(--accent2);border:1px solid rgba(63,185,80,.3)}
+  .status.off{background:rgba(210,153,34,.12);color:var(--warn);border:1px solid rgba(210,153,34,.3)}
+  .doc{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin-bottom:6px}
+  .doc .t{font-weight:600;font-size:12px}
+  .doc .m{font-size:10px;color:var(--muted);margin-top:3px;display:flex;gap:6px;flex-wrap:wrap}
+  .chip{background:var(--chip);border:1px solid var(--line);border-radius:10px;padding:1px 7px;font-size:10px;color:var(--muted)}
+  .chip.no{color:var(--bad);border-color:rgba(248,81,73,.4)}
+  .chip.res{color:var(--warn);border-color:rgba(210,153,34,.4)}
+  .bar{padding:12px 20px;border-bottom:1px solid var(--line);background:var(--panel);
+    display:flex;align-items:center;gap:14px;justify-content:space-between}
+  .bar .who{font-size:13px}
+  .bar .who b{color:var(--accent)}
+  .lock{font-size:11px;color:var(--muted);max-width:420px;text-align:right}
+  .chat{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:16px}
+  .msg{max-width:820px}
+  .msg.u{align-self:flex-end}
+  .bubble{padding:11px 14px;border-radius:10px;white-space:pre-wrap}
+  .u .bubble{background:var(--accent);color:#fff;border-bottom-right-radius:2px}
+  .a .bubble{background:var(--panel);border:1px solid var(--line);border-bottom-left-radius:2px}
+  .cites{margin-top:8px;font-size:12px}
+  .cites .c{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:4px;padding:7px 10px;margin-top:6px}
+  .cites .c .ct{font-weight:600;font-size:12px;display:flex;justify-content:space-between;gap:8px}
+  .cites .c .cb{color:var(--muted);font-size:11px;margin-top:2px}
+  .score{color:var(--accent2);font-weight:600;font-size:11px;white-space:nowrap}
+  .gov{margin-top:8px;font-size:11px;color:var(--muted);background:var(--panel2);
+    border:1px solid var(--line);border-radius:6px;padding:8px 10px}
+  .gov b{color:var(--text)}
+  .gov .ex{color:var(--bad)}
+  .fb{margin-top:8px;display:flex;gap:6px}
+  .fb button{width:auto;padding:4px 10px;font-size:11px}
+  .refuse .bubble{border-color:rgba(210,153,34,.5);background:rgba(210,153,34,.06)}
+  .inbar{padding:14px 20px;border-top:1px solid var(--line);background:var(--panel);display:flex;gap:10px}
+  .inbar textarea{flex:1;min-height:0;height:44px}
+  .inbar button{width:auto;padding:0 22px}
+  .hint{color:var(--muted);font-size:11px;margin-top:6px}
+  .log{font-size:11px;color:var(--muted);max-height:120px;overflow-y:auto}
+  .log div{padding:2px 0;border-bottom:1px dashed var(--line)}
+  details summary{cursor:pointer;color:var(--muted);font-size:12px}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <h1>Governed KB Assistant</h1>
+    <div class="sub">Local proof of concept. No cloud, no external calls.</div>
+
+    <h2>Authenticated role (simulated)</h2>
+    <label>Role scope</label>
+    <select id="role">
+      <option value="tier1">Tier 1 / Help Desk</option>
+      <option value="tier2" selected>Tier 2 / NES</option>
+      <option value="tier3">Tier 3 / Server</option>
+      <option value="tier4">Tier 4 / DA</option>
+    </select>
+    <div class="hint" id="roleHint"></div>
+    <div class="hint">In production this role comes from your CAC or Entra group claim, not a dropdown. A user only reaches a scope if they are a member of that group.</div>
+
+    <h2>Local model (optional)</h2>
+    <label>Ollama endpoint</label>
+    <input id="endpoint" value="http://localhost:11434">
+    <label>Chat model (generation)</label>
+    <select id="model"><option value="">(none) extractive fallback</option></select>
+    <label>Embedding model (semantic search)</label>
+    <select id="embModel"><option value="">(none) keyword fallback</option></select>
+    <button class="ghost" id="detect" style="margin-top:8px">Detect installed models</button>
+    <div id="ollamaStatus" class="status off">Generation offline. Governance still works.</div>
+    <div id="embStatus" class="status off">Keyword retrieval mode.</div>
+
+    <h2>Knowledge base <span id="docCount" style="color:var(--muted)"></span></h2>
+    <div id="docList"></div>
+    <details style="margin-top:10px">
+      <summary>Add a document (SME upload)</summary>
+      <label>Title</label><input id="nTitle" placeholder="e.g. Outlook Profile Repair">
+      <label>Audience (comma sep: tier1,tier2,tier3,tier4)</label><input id="nAud" value="tier1,tier2">
+      <label>Classification</label>
+      <select id="nClass"><option>internal</option><option>cui-demo</option><option>restricted</option><option>privileged</option></select>
+      <label>Approved?</label>
+      <select id="nApp"><option value="true">true</option><option value="false">false (draft)</option></select>
+      <label>Body (the answer text the bot will cite)</label><textarea id="nBody" placeholder="Write the actual step by step content here..."></textarea>
+      <button id="addDoc" style="margin-top:8px">Add to knowledge base</button>
+    </details>
+
+    <h2>Event log (feedback loop)</h2>
+    <div class="log" id="eventLog"></div>
+  </aside>
+
+  <main class="main">
+    <div class="bar">
+      <div class="who">Answers limited to: <b id="whoRole">Tier 2 / NES</b> scope</div>
+      <div class="lock">Sources are filtered per authenticated role. Answers cite evidence and refuse when no approved in-scope source matches.</div>
+    </div>
+    <div class="chat" id="chat"></div>
+    <div class="inbar">
+      <textarea id="q" placeholder="Ask something. For example: how do i fix ise failing posture   or   how do i make cmdb changes"></textarea>
+      <button id="send">Send</button>
+    </div>
+  </main>
+</div>
+
+<script>
+/* ---------- Sample knowledge base (fake / unclassified demo content) ---------- */
+const KB = [
+  { id:1, title:"Setting Up Flank Speed", source:"onboarding", topic:"flankspeed",
+    audience:["tier1","tier2","tier3","tier4"], classification:"internal", approved:true, last_reviewed:"2026-06-20",
+    body:"To get onto Flank Speed, insert your CAC and select your authentication certificate when prompted. On first sign in, complete account setup and register your device if you are prompted for device compliance. If mail does not appear, let the client discover your mailbox using your CAC identity. If Teams does not sign in, fully close and reopen it so it picks up your smart card credential. If you cannot authenticate at all, confirm your certificate is not expired and that your account has been provisioned on the tenant." },
+  { id:2, title:"VPN Troubleshooting", source:"helpdesk", topic:"vpn",
+    audience:["tier1","tier2","tier3","tier4"], classification:"internal", approved:true, last_reviewed:"2026-06-28",
+    body:"If the VPN will not connect, confirm the user has basic network access outside the tunnel first. Verify the correct certificate is selected and not expired, then clear the saved profile and re-add the gateway. If it authenticates but drops immediately, check for a duplicate active session and disconnect the old one. If it fails only on certain networks, suspect a captive portal or blocked UDP and try the fallback TCP connection." },
+  { id:3, title:"Printer Troubleshooting", source:"helpdesk", topic:"printer",
+    audience:["tier1","tier2","tier3","tier4"], classification:"internal", approved:true, last_reviewed:"2026-05-30",
+    body:"For a printer showing offline, verify the queue is not paused and the device has a valid address. Remove and re-add the printer by hostname rather than IP so name resolution handles moves. If jobs stall, restart the print spooler and resend. For driver errors after an update, remove the old driver package and install the current one from the approved software source." },
+  { id:4, title:"Common Issues and Quick Fixes", source:"helpdesk", topic:"common",
+    audience:["tier1","tier2","tier3","tier4"], classification:"internal", approved:true, last_reviewed:"2026-07-02",
+    body:"Common quick fixes. For a locked account, confirm the lockout source before unlocking so it does not immediately re-lock. For a password reset, verify identity per policy and require a change at next sign in. For a slow or unresponsive machine, check for pending updates and a full disk before escalating. For cannot open email issues, confirm the CAC is seated and the correct certificate is selected. Capture the exact error text and the time it occurred before escalating so the next tier can search logs." },
+  { id:5, title:"Cisco ISE Posture Troubleshooting", source:"nes", topic:"ise",
+    audience:["tier2","tier3","tier4"], classification:"cui-demo", approved:true, last_reviewed:"2026-07-01",
+    body:"When posture assessment fails, first confirm the endpoint has the Secure Client posture module and the compliance module installed and current. Check whether the client is landing in the correct posture policy by matching the authorization rule and the posture requirement in the ISE Live Logs. A common cause of failing posture is that the client cannot reach the remediation resources or the client provisioning portal, so verify the redirect ACL and that the client can reach ISE on the required ports. If the endpoint is stuck at pending or repeatedly noncompliant, clear the posture agent state on the client and re-run the posture flow, then confirm the posture condition actually matches what is installed. In Live Logs, a failed posture with correct authorization but wrong posture status usually points at the requirement definition rather than the network." },
+  { id:6, title:"CMDB Change Procedure", source:"server", topic:"cmdb",
+    audience:["tier2","tier3","tier4"], classification:"cui-demo", approved:true, last_reviewed:"2026-06-18",
+    body:"To make a CMDB change, open a change or update request against the affected configuration item rather than editing the CI record directly, so the change is tracked and approved. Identify the CI by its asset tag or serial and confirm you have the correct record before editing. For attribute updates such as owner, location, or status, edit the CI and set the reconciliation source so the update is not overwritten by the next discovery run. For relationships, update the affected CI relationships and validate against the dependency map. Structural changes such as creating CI classes or changing reconciliation rules require the configuration management owner and should not be done from the help desk queue. Always record the reason and reference in the change so the audit trail is complete." },
+  { id:7, title:"ISE Posture Remediation (DRAFT)", source:"nes", topic:"ise",
+    audience:["tier2","tier3","tier4"], classification:"cui-demo", approved:false, last_reviewed:"2026-07-05",
+    body:"Draft remediation steps for the new posture policy. Requirement thresholds are not finalized and the remediation links are placeholders. Do not use yet." },
+];
+
+/* ---------- Role access model (cumulative: higher tiers inherit lower scopes) ---------- */
+const ROLES = {
+  tier1:{ label:"Tier 1 / Help Desk", aud:["tier1"],                          cls:["internal"] },
+  tier2:{ label:"Tier 2 / NES",       aud:["tier1","tier2"],                   cls:["internal","cui-demo"] },
+  tier3:{ label:"Tier 3 / Server",    aud:["tier1","tier2","tier3"],           cls:["internal","cui-demo","restricted"] },
+  tier4:{ label:"Tier 4 / DA",        aud:["tier1","tier2","tier3","tier4"],   cls:["internal","cui-demo","restricted","privileged"] },
+};
+
+const STOP = new Set("the a an is are do i how to my me you your of on in for with and or what when where can it if not be as at by".split(" "));
+const SEM_FLOOR = 0.25;
+const $ = id => document.getElementById(id);
+const vectors = {}; /* docId -> embedding vector */
+
+/* ---------- Sidebar rendering ---------- */
+function renderDocs(){
+  $("docCount").textContent = "("+KB.length+")";
+  $("docList").innerHTML = KB.map(d=>{
+    const cc = (d.classification==="restricted"||d.classification==="privileged"||d.classification==="cui-demo")?"chip res":"chip";
+    const app = d.approved? "" : '<span class="chip no">unapproved</span>';
+    return `<div class="doc"><div class="t">${d.title}</div>
+      <div class="m"><span class="chip">${d.audience.join(", ")}</span>
+      <span class="${cc}">${d.classification}</span>${app}</div></div>`;
+  }).join("");
+}
+function refreshRoleHint(){
+  const r = ROLES[$("role").value];
+  $("roleHint").textContent = "May retrieve audiences ["+r.aud.join(", ")+"] and classifications ["+r.cls.join(", ")+"]";
+  $("whoRole").textContent = r.label;
+}
+
+/* ---------- Text utils ---------- */
+function tokenize(s){ return s.toLowerCase().replace(/[^a-z0-9 ]/g," ").split(/\s+/).filter(t=>t&&!STOP.has(t)); }
+function cosine(a,b){ let dot=0,na=0,nb=0; for(let i=0;i<a.length;i++){dot+=a[i]*b[i];na+=a[i]*a[i];nb+=b[i]*b[i];} return dot/((Math.sqrt(na)*Math.sqrt(nb))||1); }
+
+/* ---------- Security trimming (structural pre-filter) ---------- */
+function filterCandidates(roleKey){
+  const role = ROLES[roleKey];
+  const b = { cand:[], unapproved:[], role:[], classification:[] };
+  for(const d of KB){
+    if(!d.approved){ b.unapproved.push(d); continue; }
+    if(!d.audience.some(a=>role.aud.includes(a))){ b.role.push(d); continue; }
+    if(!role.cls.includes(d.classification)){ b.classification.push(d); continue; }
+    b.cand.push(d);
+  }
+  return b;
+}
+
+/* ---------- Ranking (semantic if embeddings ready, else keyword) ---------- */
+function keywordRank(query, cand){
+  const terms = tokenize(query);
+  const scored = cand.map(d=>{
+    const hay = tokenize(d.title+" "+d.title+" "+d.body);
+    let s=0; for(const t of terms){ for(const w of hay){ if(w===t) s++; } }
+    return { d, score:s };
+  }).filter(x=>x.score>0).sort((a,b)=>b.score-a.score);
+  return scored.slice(0,3);
+}
+async function rank(query, cand){
+  const useSem = $("embModel").value && cand.every(d=>vectors[d.id]);
+  if(useSem){
+    let qv;
+    try{ qv = await embed(query); }
+    catch(e){ return { mode:"keyword", hits:keywordRank(query,cand) }; }
+    const scored = cand.map(d=>({ d, score:cosine(qv, vectors[d.id]) }))
+      .sort((a,b)=>b.score-a.score)
+      .filter(s=>s.score>=SEM_FLOOR)
+      .slice(0,3);
+    return { mode:"semantic", hits:scored };
+  }
+  return { mode:"keyword", hits:keywordRank(query,cand) };
+}
+
+/* ---------- Ollama: embeddings, model detection, generation ---------- */
+async function embed(text){
+  const ep = $("endpoint").value.replace(/\/$/,"");
+  const model = $("embModel").value;
+  const r = await fetch(ep+"/api/embed",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({model, input:text})});
+  if(!r.ok) throw new Error("embed HTTP "+r.status);
+  const j = await r.json();
+  if(j.embeddings && j.embeddings[0]) return j.embeddings[0];
+  if(j.embedding) return j.embedding;
+  throw new Error("no embedding in response");
+}
+async function buildIndex(){
+  if(!$("embModel").value) return;
+  setEmb(false,"Indexing...");
+  for(const d of KB){
+    if(!vectors[d.id]){
+      try{ vectors[d.id] = await embed(d.title+". "+d.body); }
+      catch(e){ setEmb(false,"Embed failed. Falling back to keyword."); console.warn(e); return; }
+    }
+  }
+  setEmb(true,"Semantic index ready ("+Object.keys(vectors).length+" docs)");
+}
+async function detectModels(){
+  const ep = $("endpoint").value.replace(/\/$/,"");
+  try{
+    const r = await fetch(ep+"/api/tags");
+    const j = await r.json();
+    const models = j.models||[];
+    const cm = $("model"), em = $("embModel");
+    cm.innerHTML = '<option value="">(none) extractive fallback</option>';
+    em.innerHTML = '<option value="">(none) keyword fallback</option>';
+    models.forEach(m=>{
+      const o1=document.createElement("option"); o1.value=m.name; o1.textContent=m.name; cm.appendChild(o1);
+      const o2=document.createElement("option"); o2.value=m.name; o2.textContent=m.name; em.appendChild(o2);
+    });
+    const embGuess = models.find(m=>/embed|bge|nomic|minilm|gte/i.test(m.name));
+    const chatGuess = models.find(m=>!/embed|bge|nomic|minilm|gte/i.test(m.name));
+    if(chatGuess){ cm.value=chatGuess.name; setStatus(true,"Using "+chatGuess.name); }
+    if(embGuess){ em.value=embGuess.name; buildIndex(); }
+    else setEmb(false,"No embedding model found. Keyword mode.");
+    if(!models.length) setStatus(false,"Ollama reachable, no models pulled");
+  }catch(e){ setStatus(false,"Ollama not reachable (see console)"); console.warn(e); }
+}
+function setStatus(ok,msg){ const el=$("ollamaStatus"); el.className="status "+(ok?"ok":"off"); el.textContent=msg; }
+function setEmb(ok,msg){ const el=$("embStatus"); el.className="status "+(ok?"ok":"off"); el.textContent=msg; }
+
+async function generate(query, roleKey, hits, onToken){
+  const model=$("model").value; const ep=$("endpoint").value.replace(/\/$/,"");
+  const sources = hits.map((h,i)=>`[${i+1}] ${h.d.title}: ${h.d.body}`).join("\n\n");
+  const sys = `You are an IT knowledge assistant for a ${ROLES[roleKey].label}. Answer ONLY using the numbered sources below. Cite sources inline like [1], [2]. If the sources do not contain the answer, reply exactly: "I do not have an approved source for that at your access level. Escalate to your help desk or SME." Do not use outside knowledge.\n\nSOURCES:\n${sources}`;
+  const res = await fetch(ep+"/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({model,stream:true,messages:[{role:"system",content:sys},{role:"user",content:query}]})});
+  if(!res.ok) throw new Error("HTTP "+res.status);
+  const reader=res.body.getReader(); const dec=new TextDecoder(); let buf="",full="";
+  while(true){ const {done,value}=await reader.read(); if(done)break;
+    buf+=dec.decode(value,{stream:true}); let i;
+    while((i=buf.indexOf("\n"))>=0){ const line=buf.slice(0,i).trim(); buf=buf.slice(i+1);
+      if(!line)continue; try{ const j=JSON.parse(line); if(j.message&&j.message.content){full+=j.message.content;onToken(j.message.content);} }catch(e){} }
+  }
+  return full;
+}
+
+/* ---------- Chat UI ---------- */
+function addMsg(cls, html){
+  const d=document.createElement("div"); d.className="msg "+cls;
+  d.innerHTML=html; $("chat").appendChild(d); $("chat").scrollTop=$("chat").scrollHeight; return d;
+}
+function logEvent(t){ const l=$("eventLog"); const d=document.createElement("div");
+  d.textContent="["+new Date().toLocaleTimeString()+"] "+t; l.prepend(d); }
+function govPanel(b, mode){
+  const ex=[];
+  if(b.unapproved.length) ex.push(`${b.unapproved.length} unapproved/draft`);
+  if(b.role.length) ex.push(`${b.role.length} out of role`);
+  if(b.classification.length) ex.push(`${b.classification.length} above clearance`);
+  return `<div class="gov"><b>Governance:</b> ${KB.length} docs considered, <b>${b.cand.length}</b> approved and in scope, retrieval mode: <b>${mode}</b>`
+    + (ex.length? `, <span class="ex">excluded: ${ex.join(", ")}</span>`:"") + `</div>`;
+}
+function citeBlock(hits, mode){
+  return `<div class="cites">`+hits.map((h,i)=>{
+    const s = mode==="semantic" ? `<span class="score">similarity ${h.score.toFixed(3)}</span>` : `<span class="score">keyword match</span>`;
+    return `<div class="c"><div class="ct"><span>[${i+1}] ${h.d.title} <span class="chip">${h.d.classification}</span></span>${s}</div>
+     <div class="cb">${h.d.body}</div></div>`;
+  }).join("")+`</div>`;
+}
+function feedbackBtns(){
+  return `<div class="fb">
+    <button class="ghost" onclick="logEvent('answer marked helpful')">Helpful</button>
+    <button class="ghost" onclick="logEvent('answer marked wrong')">Wrong</button>
+    <button class="ghost" onclick="logEvent('escalated to SME')">Escalate</button></div>`;
+}
+function extractive(hits){
+  return "Based on approved sources:\n\n"+hits.map((h,i)=>`[${i+1}] ${h.d.body}`).join("\n\n")
+    +"\n\n(Generation model offline. Showing the approved evidence the model would summarize.)";
+}
+
+async function ask(){
+  const query=$("q").value.trim(); if(!query) return;
+  const roleKey=$("role").value;
+  $("q").value="";
+  addMsg("u",`<div class="bubble">${query}</div>`);
+  logEvent(`Q (${ROLES[roleKey].label}): ${query.slice(0,50)}`);
+
+  if($("embModel").value) await buildIndex();
+
+  const b = filterCandidates(roleKey);
+  if(b.cand.length===0){
+    addMsg("a refuse",`<div class="bubble">I do not have an approved source for that at your access level. Escalate to your help desk or SME.</div>${govPanel(b,"n/a")}`);
+    logEvent("Refused: no approved in-scope source");
+    return;
+  }
+
+  const { mode, hits } = await rank(query, b.cand);
+  if(hits.length===0){
+    addMsg("a refuse",`<div class="bubble">I do not have an approved source for that at your access level. Escalate to your help desk or SME.</div>${govPanel(b,mode)}`);
+    logEvent("Refused: no relevant match in scope");
+    return;
+  }
+
+  const holder=addMsg("a",`<div class="bubble" id="live">...</div>`);
+  const live=holder.querySelector("#live");
+
+  if($("model").value){
+    try{
+      live.textContent="";
+      await generate(query, roleKey, hits, tok=>{ live.textContent+=tok; $("chat").scrollTop=$("chat").scrollHeight; });
+    }catch(e){
+      live.textContent = extractive(hits);
+      setStatus(false,"Generation failed. Using fallback.");
+    }
+  }else{
+    live.textContent = extractive(hits);
+  }
+  live.insertAdjacentHTML("afterend", citeBlock(hits,mode)+govPanel(b,mode)+feedbackBtns());
+}
+
+/* ---------- Wire up ---------- */
+$("role").onchange=refreshRoleHint;
+$("send").onclick=ask;
+$("q").addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();ask();} });
+$("detect").onclick=detectModels;
+$("model").onchange=()=>{ const m=$("model").value; setStatus(!!m, m?("Using "+m):"Generation offline. Governance still works."); };
+$("embModel").onchange=()=>{ if($("embModel").value) buildIndex(); else setEmb(false,"Keyword retrieval mode."); };
+$("addDoc").onclick=()=>{
+  const t=$("nTitle").value.trim(); if(!t) return;
+  KB.push({ id:Date.now(), title:t, source:"sme", topic:"custom",
+    audience:$("nAud").value.split(",").map(s=>s.trim()).filter(Boolean),
+    classification:$("nClass").value, approved:$("nApp").value==="true",
+    last_reviewed:new Date().toISOString().slice(0,10), body:$("nBody").value.trim() });
+  renderDocs(); logEvent("SME added doc: "+t); $("nTitle").value="";$("nBody").value="";
+  if($("embModel").value) buildIndex();
+};
+
+renderDocs(); refreshRoleHint();
+addMsg("a",`<div class="bubble">Local governed KB assistant is ready. Pick a role scope on the left, then ask a question.\n\nTry the same question across roles to see access control in action:\n- "how do i fix ise failing posture" as Tier 1 / Help Desk (refused, out of role) versus Tier 2 / NES (answered).\n- "how do i make cmdb changes" as Tier 1 / Help Desk (refused, out of role) versus Tier 2 / NES (answered).\n\nThe draft ISE doc is ignored no matter what, since it is not approved. Point the endpoint at your Ollama and hit Detect installed models to turn on real generation and semantic search. Without a model, the governance layer still works and shows the approved evidence.</div>`);
+</script>
+</body>
+</html>
