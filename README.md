@@ -1,26 +1,43 @@
-IPv6 hardening
+1. **SSH daemon config**: Use an `sshd_config.d` drop-in instead of replacing the main config. Replacing it can remove GitLab's `AuthorizedKeysCommand` and break Git over SSH.
 
-Audit load measured
+2. **SSH access restrictions**: If we use `AllowGroups` or `DenyUsers`, make sure the GitLab `git` account is still allowed.
 
-Audit failure mode
+3. **SSH crypto requirements**: Older SHA-1 RSA keys will stop working, so developers may need new keys before cutover. Ed25519 keys also will not work on FIPS-enabled hosts.
 
-disk_full_action
+4. **`/tmp` noexec**: This can break Jira/Confluence Java libraries and `gitlab-ctl reconfigure`. The apps should use their own temp directories instead.
 
-SSH key inventory
+5. **Audit failure action**: Using `-f 2` can panic the kernel if the audit backlog fills. Recommend `-f 1` instead. **ISSM decision required.**
 
-SSH developer notice sent
+6. **Audit disk-full action**: Using `HALT` can take the server down if the audit partition fills. Recommend `SYSLOG`, a dedicated 15 GB audit volume, and alerting. **ISSM decision required.**
 
-SSH hardening applied
+7. **IPv4 forwarding**: Docker-based GitLab Runners need this enabled for container networking. **Deviation required for Runner hosts only.**
 
-ip_forward scoped
+8. **IPv6 hardening**: Harden IPv6 settings like `accept_ra`, redirects, and source routing, but do not disable IPv6 completely since some apps may rely on `::1`.
 
-Version-lock review owned
+9. **Separate `/var` filesystem**: Make sure `/var` is sized appropriately. GitLab and Atlassian app data should live on a separate disk so `/var` does not fill unexpectedly.
 
-FIPS decision for GitLab
+10. **AIDE**: Avoid scanning high-churn application data because it can cause heavy disk contention. Keep normal system paths such as `/opt` monitored.
 
-Rescan diff clean
+11. **Audit rules**: The full audit rule set can add noticeable CPU/IO load and log growth, especially on GitLab and CI systems. Size the audit volume accordingly and watch for dropped records.
 
-2026.10.1 captured
+12. **FIPS mode**: Atlassian hosts will need a **CAT I deviation** because FIPS mode is not supported. GitLab should use the `gitlab-fips` package.
+
+13. **Default umask `077`**: This can break applications that need group-readable files. Set a different umask at the service level where required.
+
+14. **Resource limits**: Increase open-file limits for applications that need it. GitLab should generally have at least `65535`.
+
+15. **Host firewall**: With a default-deny firewall, application ports will need to be explicitly opened as part of deployment.
+
+16. **Time synchronization**: Confirm chrony is actually synced to a reachable authoritative source. Bad time sync can break Kerberos, LDAP, and SAML.
+
+17. **Account lockout/password aging**: Service accounts should be `nologin` and non-expiring so lockout or password aging does not stop the application.
+
+18. **Security patching**: Do not allow unattended application upgrades. Version-lock application packages and patch them during planned maintenance windows.
+
+19. **Post-patch config checks**: Check for `.rpmnew` and `.rpmsave` files after patching so proxy or application configs are not missed or replaced.
+
+20. **GRUB authentication**: After setting the GRUB password, test a reboot right away to make sure the server can still boot normally without manual intervention.
+
 
 
 ```
