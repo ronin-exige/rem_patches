@@ -1,3 +1,51 @@
+
+Requirements Gathering
+
+We don't currently have a separate environment to test golden image or hardening changes before they reach the developer environment. This project creates a pre-prod environment where those changes can be validated first.
+
+The environment needs to support:
+
+- STIG compliance testing: Use Nessus compliance scans with the DISA STIG audit files, the same way we plan to scan production systems.
+- Credentialed vulnerability scanning: Each VM will need a working scan service account. That work is being handled in a separate project and should be linked here as a dependency.
+- Golden image testing: Validate both image types separately:
+  - FIPS-enabled image
+  - DEFAULT crypto policy image used for the Jira and Confluence compatibility exception
+- Basic functional testing: Confirm services start normally, TLS works, domain join/authentication works, and GitLab Runner can register successfully.
+
+We are not expecting a separate Azure subscription, so the environment will be logically separated within the existing subscription. The resource group, VNet, subnet, NSGs, and VMs are already in place.
+
+Plan Development
+
+Start by reviewing the separation between the test and developer environments. This includes subscription-level RBAC, identities, deployment accounts, Key Vault, IaC state, and DNS.
+
+Next, separate the monitoring and logging. The test environment should have its own Log Analytics workspace and Data Collection Rules so test activity does not mix with the developer environment.
+
+Once the scan service accounts are available, add the test VMs to Nessus and run credentialed baseline scans against both image types. These results will be used as the baseline for future image changes.
+
+After that, set up the image promotion process:
+
+New image version → deploy to test → run Nessus scans and smoke tests → promote for use in the developer environment.
+
+New versions should not be marked as "latest" until testing is complete.
+
+Open item: Confirm whether the additional test VMs require more Nessus scanner capacity or licensing. If not, no purchase request is needed.
+
+Cross-Project Blocker
+
+The scan service account ticket should be linked to this issue as:
+
+is blocked by → [service account issue key]
+
+It would also be helpful to put the issue key near the top of the description so the dependency is easy to see.
+
+The Jira issue link itself does not normally prevent someone from moving the ticket forward. Unless we already have something like ScriptRunner or JSU configured to enforce it, the simplest option is to treat completion of the service account ticket as an exit requirement for Cybersecurity Review.
+
+That keeps the dependency visible without adding additional Jira workflow changes.
+
+
+
+
+-‐-----—--------------
 1. **SSH daemon config**: Use an `sshd_config.d` drop-in instead of replacing the main config. Replacing it can remove GitLab's `AuthorizedKeysCommand` and break Git over SSH.
 
 2. **SSH access restrictions**: If we use `AllowGroups` or `DenyUsers`, make sure the GitLab `git` account is still allowed.
